@@ -439,7 +439,8 @@ simIndexColor (t1,t2) i | i >= t2   = "sim-high"
 htmlSimRanks :: Thresholds -> SimCatalogue -> String
 htmlSimRanks ts = unlines . map htmlRanks . filter (isJust . snd) . flatten
   where htmlRanks (x,Just r) = 
-          printf "<a id=\"sim-%s\"><h2><a href=\"#%s\"><span class=\"item-font\">%s</a></h2>" (itemId x) (itemId x) (htmlItem x) ++
+          printf "<a id=\"sim-%s\"><h2>[%s] %s</h2>"
+            (itemId x) (itemId x) (itemLabel x) ++
           printf "<p>Editor(s): <i>%s</i><br>Remark: <i>%s</i></p>"
             (htmlEditorsInline x)
             (fromMaybe "NA" $ itemRemark x) ++ 
@@ -486,8 +487,8 @@ mergeCatalogues cs =
   Node (Item CAT "FER3" "FER3" (Just catVersion) [] Nothing) $ 
   concatMap subForest cs
 
-inDir  = "/home/jan/fer3/granule/v2/in"
-outDir = "/home/jan/fer3/granule/v2/out"
+inDir  = "/home/jan/fer3/granule/v1/in"
+outDir = "/home/jan/fer3/granule/v1/out"
 
 catFiles = [
     "FER3-Knowledge-Catalogue-CS-v6.csv"
@@ -503,7 +504,7 @@ swFile  = "data/stopwords.txt"
 thresholds1 = (0.50,0.75)
 thresholds2 = (0.33,0.66)
 
-catVersion = "2.0"
+catVersion = "1.0"
 
 main = do
   sw <- lines <$> readFile swFile
@@ -524,8 +525,12 @@ main = do
       cc2 = simCatalogue sim2 ((`elem` [KA,KU,KT]) . itemType) sc2
   writeFile (outDir</>"csv"</> printf "FER3-v%s.csv" catVersion) $ 
     csvCatalogue c
-  writeFile (outDir</>"html"</>"FER3.html") $ htmlCatalogue c
-  writeFile "FER3-sim1.html" $ htmlSimCatalogue thresholds1 cc1
-  writeFile "FER3-sim2.html" $ htmlSimCatalogue thresholds2 cc2
-  writeFile (outDir</>"html"</>"FER3-editors.html") $ htmlEditors c
+  writeFile (outDir</>"html"</>"FER3.html") $ 
+   htmlCatalogue c
+  writeFile (outDir</>"html"</>"FER3-sim1.html") $ 
+    htmlSimCatalogue thresholds1 cc1
+  writeFile (outDir</>"html"</>"FER3-sim2.html") $ 
+    htmlSimCatalogue thresholds2 cc2
+  writeFile (outDir</>"html"</>"FER3-editors.html") $ 
+    htmlEditors c
 
