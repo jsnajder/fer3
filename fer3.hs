@@ -5,40 +5,42 @@
 ------------------------------------------------------------------------------
 
 import Control.Applicative ((<$>))
+import Control.Monad
+import Data.Function
 import Data.List.Split (splitOn,splitOneOf)
 import Data.Char
+import qualified Data.Foldable
+import Data.List
+import Data.Map (Map)
+import qualified Data.Map as M
+import Data.Maybe
+import Data.Ord hiding (compare)
+import Data.Set (Set)
+import qualified Data.Set as S
+import Data.Tree
+import Data.Traversable hiding (forM)
+import qualified NLP.Stemmer as Stemmer
+import Prelude hiding (sequence,compare)
+import System.FilePath
 import System.IO
 import Text.Parsec hiding (label,labels)
 import Text.Parsec.String
-import qualified NLP.Stemmer as Stemmer
 import Text.Printf
-import Data.List
-import Data.Ord hiding (compare)
-import Data.Tree
-import Data.Traversable hiding (forM)
-import Prelude hiding (sequence,compare)
-import qualified Data.Set as S
-import Data.Set (Set)
-import Data.Maybe
-import qualified Data.Foldable
-import qualified Data.Map as M
-import Data.Map (Map)
-import Control.Monad
-import System.FilePath
 
 ------------------------------------------------------------------------------
 
 type Catalogue = Tree Item
 
-data ItemType = CAT | KA | KU | KT deriving (Eq,Show,Enum)
+data ItemType = CAT | KA | KU | KT deriving (Eq,Show,Enum,Read)
 
 data Item = Item
   { itemType    :: ItemType
   , itemId      :: String
   , itemLabel   :: String
+  , itemPath    :: [String]
   , itemVersion :: Maybe String
   , itemEditors :: [String]
-  , itemRemark  :: Maybe String } deriving (Eq,Show)
+  , itemRemark  :: Maybe String } deriving (Eq,Show,Read)
 
 ------------------------------------------------------------------------------
 -- Basic querying
@@ -108,7 +110,7 @@ catalogue = do
   count 4 nextLine
   xs <- many (item 1)
   eof
-  return $ Node (Item CAT id label (Just version) 
+  return $ Node (Item CAT id label [label] (Just version)
                 (stringSequence editor) Nothing) xs
   
 stringSequence :: String -> [String]
@@ -136,7 +138,7 @@ item level = do
   nextLine
   optional $ try emptyRow
   xs <- if level==3 then return [] else many . try . item $ level + 1
-  return $ Node (Item (toEnum level) id label Nothing editor remark) xs
+  return $ Node (Item (toEnum level) id label [] Nothing editor remark) xs
 
 emptyRow :: Parser ()
 emptyRow = manyTill (char ',') newline >> return ()
@@ -149,7 +151,7 @@ csvCatalogue :: Catalogue -> String
 csvCatalogue c@(Node x ns) = 
   "FER3 Knowledge Catalogue,,,,,,,\n" ++
   printf "Catalogue:,,%s,,,,,\nCatalogue ID:,,%s,,,,,\nVersion:,,%s,,,,,\nDate:,\n"
-    (itemLabel x) (itemId x) (fromMaybe "NA" $ itemVersion x) ++
+    (csvQuote $ itemLabel x) (itemId x) (fromMaybe "NA" $ itemVersion x) ++
   printf "Editor(s):,,%s,,,,,\nComment:,,%s\n" 
     (csvQuote . showSequence $ itemEditors x) 
     (csvQuote . fromMaybe "" $ itemRemark x) ++
@@ -199,6 +201,16 @@ fixEditors c@(Node x ns) = fix [] (Node x' ns)
                x { itemEditors = map (++ " (CE)") $ itemEditors x }
            | otherwise = x
 
+fixPaths :: Catalogue -> Catalogue
+fixPaths c = fix [] c
+  where fix z (Node x ns) = 
+          let z' = z ++ [printf "[%s] %s" (itemId x) (itemLabel x)]
+          in Node (x { itemPath = z' }) $ map (fix z') ns
+
+fixVersion :: Catalogue -> Catalogue
+fixVersion c@(Node x ns) = fix (itemVersion x) c
+  where fix v (Node x ns) = Node (x { itemVersion = v }) $ map (fix v) ns
+
 fixLabels :: Catalogue -> Catalogue
 fixLabels = fmap (\x -> x {itemLabel = fixLabel (itemLabel x)})
 
@@ -212,7 +224,7 @@ fixLabel s  =
         isPunct c = c=='.' || c==';'
 
 fixCatalogue :: Catalogue -> Catalogue
-fixCatalogue = fixEditors . fixLabels . prefixRootId . fixIds
+fixCatalogue = fixPaths . fixEditors . fixLabels . prefixRootId . fixIds
 
 ------------------------------------------------------------------------------
 -- Semantic representations
@@ -316,21 +328,52 @@ sim2 c1 c2 = compare r1 r2
   where r1 = foldl1 compose . map snd $ flatten c1
         r2 = foldl1 compose . map snd $ flatten c2
 
+sim3 :: (SemRep a, Eq a) => CatalogueSim a
+sim3 c1@(Node (x1,r1) _) c2@(Node (x2,r2) _)
+  | ((itemType x1 == KT && itemType x2 /= KT) ||
+    (itemType x1 /= KT && itemType x2 == KT)) && (not $ sameArea c1' c2')
+    = 1 - sqrt (1 - compare r1 r2)
+  | itemType x1 `elem` [KA,KU] && itemType x2 `elem` [KA,KU] && (not $ sameArea c1' c2')
+    = compare r1' r2'
+  | otherwise = 0
+  where 
+    r1' = foldl1 compose . map snd $ flatten c1
+    r2' = foldl1 compose . map snd $ flatten c2
+    c1' = fmap fst c1
+    c2' = fmap fst c2
+ 
+samePath :: Catalogue -> Catalogue -> Bool   
+samePath c1 c2 = c1 `isSubtree` c2 || c2 `isSubtree` c1
+
+-- tmp, because there are no backpointers!
+sameArea :: Catalogue -> Catalogue -> Bool
+sameArea c1 c2 = a1 `isPrefixOf` a2 || a2 `isPrefixOf` a1
+  where a1 = areaId $ rootLabel c1
+        a2 = areaId $ rootLabel c2
+--sameArea c c1 c2 = any (\a -> c1 `isSubtree` a && c2 `isSubtree` a) areas
+--  where areas = subForest c
+
+areaId :: Item -> String
+areaId = takeWhile (not . isDigit) . itemId
+
+minSim = 0.33
+
 catCompareOn :: SemRep a =>
   CatalogueSim a -> SemCatalogue a -> [SemCatalogue a] -> [(Double,Item)]
 catCompareOn f x = 
-  sortBy (flip $ comparing fst) . filter ((>0) . fst) . 
+  sortBy (flip $ comparing fst) . filter ((>=minSim) . fst) . 
   map (\y -> (f x y, fst $ rootLabel y))
 
 -- catCompare f x c: compares x against all subcatalogues of c,
 -- excluding x, all supercatalogues of x, and all subcatalogues of x
 catCompare :: (SemRep a, Eq a) =>
   CatalogueSim a -> SemCatalogue a -> SemCatalogue a -> [(Double,Item)]
-catCompare f x c = catCompareOn f x sc
-  where sc = filter (\y -> not (y `isSubtree` x || x `isSubtree` y)) $ subtrees c
+catCompare f x = catCompareOn f x . subtrees
+  --where sc = filter (\y -> not (y `isSubtree` x || x `isSubtree` y)) $ subtrees c
 
 subtrees :: Tree a -> [Tree a]
 subtrees n@(Node _ ns) = n : concatMap subtrees ns
+--subtrees n@(Node _ ns) = concatMap subtrees ns
 
 -- subtree test (not invariant to subforest order!)
 isSubtree :: Eq a => Tree a -> Tree a -> Bool
@@ -341,14 +384,12 @@ subtreesTree n@(Node _ ns) = Node n (map subtreesTree ns)
 
 type SimRank = [(Double,Item)]
 
-type SimCatalogue = Tree (Item,Maybe SimRank)
+type SimCatalogue = Tree (Item, SimRank)
 
 simCatalogue :: (SemRep a, Eq a) => 
-  CatalogueSim a -> (Item -> Bool) -> SemCatalogue a -> SimCatalogue
-simCatalogue s p c = fmap f $ subtreesTree c
-  where f n | p x       = (x, Just $ catCompare s n c)
-            | otherwise = (x, Nothing)
-          where x = fst $ rootLabel n
+  CatalogueSim a -> SemCatalogue a -> SimCatalogue
+simCatalogue s c = 
+  fmap (\n -> (fst $ rootLabel n, catCompare s n c)) $ subtreesTree c
 
 ------------------------------------------------------------------------------
 -- HTML output
@@ -384,6 +425,20 @@ htmlItem :: Item -> String
 htmlItem x = 
   printf "<span class=\"%s-font\" title=\"%s\">[%s] %s</span>" 
     (show $ itemType x) (infoText::String) (itemId x) (itemLabel x)
+  where infoText = printf "%s %s\n\n%s\n\nVersion: %s\nEditor(s): %s\nRemark: %s" 
+                     (itemTypeName x) (itemId x) 
+                     (intercalate "\n -> " $ itemPath x)
+                     (optText itemVersion)
+                     (showSequence $ itemEditors x)
+                     (optText itemRemark)
+        optText f = fromMaybe "NA" $ f x
+
+htmlItem2 :: Item -> String
+htmlItem2 x = 
+  printf ("<span class=\"%s-font\" title=\"%s\">[%s]</span></td><td>" ++ 
+         "<span class=\"%s-font\" title=\"%s\">%s</span>")
+    (show $ itemType x) (infoText::String) (itemId x) 
+    (show $ itemType x) (infoText::String) (itemLabel x) 
   where infoText = printf "%s %s\nVersion: %s\nEditor(s): %s\nRemark: %s" 
                      (itemTypeName x) (itemId x) 
                      (optText itemVersion)
@@ -399,6 +454,7 @@ itemTypeName x = case itemType x of
   KA -> "Knowledge Area"
   KU -> "Knowledge Unit"
   KT -> "Knowledge Topic"
+  CAT -> "Catalogue"
 
 ---
 
@@ -424,12 +480,10 @@ htmlSimNode i ts n@(Node (x,r) xs) =
     (3-i) (itemId x) (itemId x) (simIndexColor ts si) (htmlItem x) ++ 
   showSim ++ "</tr>\n" ++ 
   concatMap (htmlSimNode (i+1) ts) xs
-  where simIndex (Just ((i,_):_)) = i
-        simIndex (Just [])        = 0
-        simIndex Nothing          = 0
+  where simIndex ((i,_):_) = i
+        simIndex []        = 0
         si = simIndex r
-        showSim | isNothing r = "<td></td>"
-                | otherwise = printf "<td><span class=\"%s-font\">%.0f%%</span></td>" (simIndexColor ts si) (si * 100)
+        showSim = printf "<td><span class=\"%s-font\">%.0f%%</span></td>" (simIndexColor ts si) (si * 100)
 
 simIndexColor :: Thresholds -> Double -> String
 simIndexColor (t1,t2) i | i >= t2   = "sim-high"
@@ -437,15 +491,15 @@ simIndexColor (t1,t2) i | i >= t2   = "sim-high"
                         | otherwise = "sim-low"
 
 htmlSimRanks :: Thresholds -> SimCatalogue -> String
-htmlSimRanks ts = unlines . map htmlRanks . filter (isJust . snd) . flatten
-  where htmlRanks (x,Just r) = 
-          printf "<a id=\"sim-%s\"><h2>[%s] %s</h2>"
-            (itemId x) (itemId x) (itemLabel x) ++
+htmlSimRanks ts = unlines . map htmlRanks . filter (not . null . snd) . flatten
+  where htmlRanks (x, r) = 
+          printf "<a id=\"sim-%s\" href=#%s><h2>[%s] %s</h2></a>"
+            (itemId x) (itemId x) (itemId x) (itemLabel x) ++
           printf "<p>Editor(s): <i>%s</i><br>Remark: <i>%s</i></p>"
             (htmlEditorsInline x)
             (fromMaybe "NA" $ itemRemark x) ++ 
           "<table><th></th><th>Knowledge Area/Unit/Topic</th><th>Editor(s)</th>" ++
-          concatMap htmlSimItem (take 10 r) ++ "</table></a>"
+          concatMap htmlSimItem r ++ "</table>"
         htmlSimItem (i,x) = 
           printf "<tr><td><span class=\"%s-font\">%.0f%%</span></td><td><a href=#%s><span class=\"item-font\">%s</span></a></td><td><i>%s</i></td></tr>"
           (simIndexColor ts i) (i * 100) (itemId x) (htmlItem x)
@@ -481,22 +535,62 @@ editorLink :: String -> String
 editorLink = ("FER3-editors.html#" ++) . filter isAlpha
 
 ------------------------------------------------------------------------------
+-- CSV SimCat ranks output
+------------------------------------------------------------------------------
+
+csvSimRanks :: SimCatalogue -> String
+csvSimRanks = unlines . map csvRanks . filter (not . null . snd) . flatten
+  where csvRanks (x,r) = 
+          printf "[%s],%s,,,,%s\n" 
+            (itemId x) (csvQuote $ itemLabel x)
+            (csvQuote . intercalate ", " $ itemEditors x) ++ 
+            concatMap csvSimItem r
+        csvSimItem (i,x) = 
+          printf ",%.0f%%,[%s],%s,%s\n"
+          (i * 100) (itemId x) (csvQuote $ itemLabel x)
+          (csvQuote . intercalate ", " $ itemEditors x)
+
+csvSimRanks2 :: (Item -> Bool) -> SimCatalogue -> String
+csvSimRanks2 p = 
+  unlines . map csvRanks . filter (p . fst) . filter (not . null . snd) . flatten
+  where csvRanks (x,r) = 
+          printf "[%s],%s,,,,%s\n" 
+            (itemId x) (csvQuote $ itemLabel x)
+            (csvQuote . intercalate ", " $ itemEditors x) ++ 
+            concatMap csvSimItem r
+        csvSimItem (i,x) = 
+          printf ",%.0f%%,[%s],%s,%s\n"
+          (i * 100) (itemId x) (csvQuote $ itemLabel x)
+          (csvQuote . intercalate ", " $ itemEditors x)
+
+------------------------------------------------------------------------------
 
 mergeCatalogues :: [Catalogue] -> Catalogue
 mergeCatalogues cs = 
-  Node (Item CAT "FER3" "FER3" (Just catVersion) [] Nothing) $ 
+  Node (Item CAT "FER3" "FER3" [] (Just catVersion) [] Nothing) $ 
   concatMap subForest cs
 
 inDir  = "/home/jan/fer3/granule/v1/in"
 outDir = "/home/jan/fer3/granule/v1/out"
 
 catFiles = [
-    "FER3-Knowledge-Catalogue-CS-v6.csv"
+    "Automatika_granule_V4_AUT.csv"
+  , "FER3_CE_RASIP_20140924.csv"
+  , "FER3-Knowledge-Catalogue-CS-v6.csv"
+  , "Automatika_granule_V4_CSY.csv"
   , "FER3_Knowledge_Catalogue_ZEA.csv"
-  , "Granule_elektronika_mikroelektronika_catalogue_engl_final.csv"
+  , "Granule_elektronika_mikroelektronika_catalogue_engl_final_3.csv"
+  , "ECE_KnowledgeUnits_2014_7_22.csv"
   , "FER3_Knowledge_Catalogue_FEE_M_v2-4.csv"
+  , "ZESA_granule_EN_16_09_2014.csv"
+  , "FER3_EnergyPowerSystems_Knowledge_Units_v1.01.csv"
+  , "IP_KnowledgeUnits_2014_7_22.csv"
   , "FER3_-_Mathematics.csv"
   , "FER3_Knowledge_Catalogue_Physics.csv"
+  , "Automatika_granule_V4_RES.csv"
+  , "Automatika_granule_V4_ROB.csv"
+  , "FER3-Knowledge-Catalogue-SE-1.0.csv"
+  , "Područja i granule znanja (TKI) - mreže  - 07092014 - za Povjerenstvo.csv"
   , "FER3_WT_Knowledge_Catalogue-1.csv"]
 
 swFile  = "data/stopwords.txt"
@@ -509,7 +603,7 @@ catVersion = "1.0"
 main = do
   sw <- lines <$> readFile swFile
   cs <- forM catFiles $ \f -> do
-          c <- fixLabels . fixIds . readCatalogue <$> readFile (inDir </> f)
+          c <- fixVersion . fixLabels . fixIds . readCatalogue <$> readFile (inDir </> f)
           let (ka,ku,kt) = catStats c
               areaId     = itemId $ rootLabel c
               ver        = fromMaybe "" . itemVersion $ rootLabel c
@@ -517,20 +611,35 @@ main = do
                             areaId ka ku kt
           writeFile (outDir</>"csv"</> printf "FER3-%s-v%s.csv" areaId ver) $ 
             csvCatalogue c
-          return (fixEditors $ prefixRootId c)
+          return (fixPaths . fixEditors $ prefixRootId c)
   let c   = mergeCatalogues cs
-      sc1 = semCatalogueBow sw c
-      cc1 = simCatalogue sim1 ((`elem` [KA,KU,KT]) . itemType) sc1
-      sc2 = semCatalogueTfIdf sw c
-      cc2 = simCatalogue sim2 ((`elem` [KA,KU,KT]) . itemType) sc2
+      (ka,ku,kt) = catStats c
+      --sc1 = semCatalogueBow sw c
+      semCat = semCatalogueTfIdf sw c
+      simCat = simCatalogue sim3 semCat
+  putStrLn $ printf "TOTAL: %d areas, %d units, %d topics" ka ku kt
   writeFile (outDir</>"csv"</> printf "FER3-v%s.csv" catVersion) $ 
     csvCatalogue c
   writeFile (outDir</>"html"</>"FER3.html") $ 
    htmlCatalogue c
-  writeFile (outDir</>"html"</>"FER3-sim1.html") $ 
-    htmlSimCatalogue thresholds1 cc1
-  writeFile (outDir</>"html"</>"FER3-sim2.html") $ 
-    htmlSimCatalogue thresholds2 cc2
   writeFile (outDir</>"html"</>"FER3-editors.html") $ 
     htmlEditors c
+--  writeFile (outDir</>"sim"</>"FER3-sim.txt") $ show simCat
+
+outputSimCatHtml = do
+  simCat <- read <$> readFile (outDir</>"sim"</>"FER3-sim.txt") :: IO SimCatalogue
+  writeFile (outDir</>"html"</>"FER3-sim.html") $ 
+    htmlSimCatalogue thresholds2 simCat
+
+cats :: SimCatalogue -> [String]
+cats = map catName . map (fst . rootLabel) . subForest  
+
+catName :: Item -> String
+catName = takeWhile (/='-') . itemId
+
+outputSimRanksCsv = do
+  simCat <- read <$> readFile (outDir</>"sim"</>"FER3-sim.txt") :: IO SimCatalogue
+  forM_ (cats simCat) $ \c ->
+    writeFile (outDir</>"csv"</>(printf "FER3-%s.sim.csv" c)) $ 
+      csvSimRanks2 ((==c) . catName) simCat
 
