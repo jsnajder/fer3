@@ -1,17 +1,35 @@
 module Reader.CSV where
 
-import Data.List.Split (splitOn,splitOneOf)
+import Control.Applicative ((<$>))
+import Data.Char (isSpace)
 import Text.Parsec hiding (label,labels)
 import Text.Parsec.String
 
-stringCell :: Parser String
-stringCell = do
-  s <- quotedCell <|> many1 (noneOf ",\n\r")
-  char ',' <|> lookAhead newline
-  return s
+type Field = String
 
-quotedCell :: Parser String
-quotedCell = 
+readCSV :: String -> Either ParseError [[Field]]
+readCSV s = map pruneRow <$> parse parseCSV "(unknown)" s
+
+parseCSV :: Parser [[Field]]
+parseCSV = parseRow `sepBy` newline
+
+pruneRow :: [Field] -> [Field]
+pruneRow s = case map pruneCell s of
+  [[]] -> []
+  xs   -> xs
+
+pruneCell :: Field -> Field
+pruneCell s | all isSpace s = ""
+            | otherwise     = s
+
+parseRow :: Parser [Field]
+parseRow = parseField `sepBy` char ','
+
+parseField :: Parser Field
+parseField = quotedString <|> many (noneOf ",\n\r")
+
+quotedString :: Parser String
+quotedString = 
   do char '"'
      content <- many quotedChar
      char '"' <?> "quote at end of cell"
@@ -20,8 +38,7 @@ quotedCell =
 quotedChar :: Parser Char
 quotedChar = noneOf "\"" <|> try (string "\"\"" >> return '"')
 
-nextLine :: Parser ()
-nextLine = anyChar `manyTill` newline >> return () 
+------
 
 csvQuote :: String -> String
 csvQuote s | needsQuotes = "\"" ++ escape s ++ "\""
@@ -31,10 +48,9 @@ csvQuote s | needsQuotes = "\"" ++ escape s ++ "\""
         escape ('"':xs) = "\"\"" ++ escape xs
         escape (x:xs)   = x : escape xs
 
+{-
 stringSequence :: String -> [String]
 stringSequence [] = []
 stringSequence s  = map (unwords . words) $ splitOneOf ",;" s
-
-emptyRow :: Parser ()
-emptyRow = manyTill (char ',') newline >> return ()
+-}
 
