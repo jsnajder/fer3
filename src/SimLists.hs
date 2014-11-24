@@ -5,7 +5,7 @@ module SimLists where
 import Catalogue
 import Control.Applicative ((<$>), liftA2)
 import Control.Monad
-import CSV (readCSV, Field)
+import CSV (readCSV, showCSV, Field, CSV)
 import Data.Char
 import qualified Data.EdgeLabeledGraph as G
 import Data.Function
@@ -30,42 +30,73 @@ type SimGraphPaired = G.Graph ItemKey ItemId (SimLabel, SimLabel)
 instance G.Vertex ItemId T.Text where
   index = T.pack . showItemId
 
-dir = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.1/sim-lists"
-
-diagreements = do
-  fs <- csvFiles dir
-  gs <- loadSimLists fs
-  return $ disagreementGraph gs
-
-overlaps = do
-  fs <- csvFiles dir
-  gs <- loadSimLists fs
-  return . overlapGraph . pairGraph $ G.unions gs
-
-overlapingUnits g = 
- eqClassesGen (\v -> map snd $ G.outEdges v g) (G.vertices g)
+dir     = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.1/"
+simDir  = dir </> "sim-lists"
+catFile = dir </> "csv/FER3-v0.1.1.csv"
+outDir  = dir </> "sim-lists-disagree/"
 
 csvFiles d = 
   map (d </>) . filter (".sim.csv" `isSuffixOf`) <$> getDirectoryContents d
 
-loadSimLists :: [FilePath] -> IO [SimGraph]
-loadSimLists fs = do
+loadSimLists :: [FilePath] -> IO SimGraph
+loadSimLists fs = G.unions <$> do
   forM fs $ \f -> do
     putStrLn f
     Right g <- readSimGraphCSV <$> readFile f
     g `seq` return g
 
-disagreementGraph :: [SimGraph] -> SimGraphPaired
-disagreementGraph = G.filterEdges dis . pairGraph . G.unions
+generateDisagreementLists :: IO ()
+generateDisagreementLists = do
+  Right c <- loadCatalogue catFile
+  fs <- csvFiles simDir
+  g  <- filterSpurious <$> loadSimLists fs
+  let d = disagreementGraph g
+  forM_ (splitSimGraph d) $ \(cat,d) -> do
+    let cvs = csvSimList d c
+        fn  = printf "FER3-%s.sim.disagree.csv" cat
+    writeFile (outDir </> fn) $ showCSV cvs
+
+-- filters out some spurious labelings
+filterSpurious :: SimGraph -> SimGraph
+filterSpurious = G.filterEdges (\v1 v2 l -> not $ f v1 v2 l)
+  where f v1 v2 l = catCode v1 `elem` ["CS","CE","SE"] &&
+                    catCode v2 `elem` ["CS","CE","SE"] &&
+                    catCode v1 /= catCode v2 &&
+                    areaCode v1 == areaCode v2 &&
+                    unitId v1 /= unitId v2
+
+disagreementGraph :: SimGraph -> SimGraphPaired
+disagreementGraph = G.filterEdges dis . pairGraph
   where dis _ _ (l1,l2) = l1 /= l2 && 
                           (not ((l1 == E && l2 == O) || (l1 == O && l2 == E)))
-{-
-partitionByCat :: SimGraphPaired -> [(String,SimGraphPaired)]
-partitionByCat g = 
-  [ (edgeOutCat e, G.fromEdgeList es) | 
-    es@(e:_) <- groupBy ((==) `on` edgeOutCat) $ G.toEdgeList g ]
-  where edgeOutCat (v1,_,_) = catCode v1
--}
+
+csvSimList :: SimGraphPaired -> Catalogue -> CSV
+csvSimList sg c = concatMap (csvItemList sg c) . G.vertices $ catAreas c
+
+csvItemList :: SimGraphPaired -> Catalogue -> Item -> CSV
+csvItemList sg c x 
+  | null xs = []
+  | otherwise = 
+      [showItemId $ itemId x, itemLabel x, [], [], [], showEditors x] :
+      map csvLabeledItem xs ++ [[]]
+  where xs = simItems sg c x
+        csvLabeledItem (l1,l2,x) =
+          [show l1, show l2, showItemId $ itemId x, itemLabel x, showEditors x]
+        showEditors = intercalate ", " . itemEditors
+
+splitSimGraph :: SimGraphPaired -> [(String, SimGraphPaired)]
+splitSimGraph =
+  map (\es@(e:_) -> (outCatCode e, G.fromEdgeList es)) . 
+  groupBy ((==) `on` outCatCode) . 
+  sortBy (compare `on` outCatCode) . 
+  G.toEdgeList 
+  where outCatCode (x,_,_) = catCode x
+
+simItems :: 
+  SimGraphPaired -> Catalogue -> Item -> [(SimLabel, SimLabel, Item)]
+simItems sg cat x =
+  mapMaybe (\((l1,l2),v) -> (l1,l2,) <$> G.vertex (G.index v) (catAreas cat)) $ 
+  G.outEdges (itemId x) sg
 
 pairGraph :: 
   (G.Vertex v k, Eq v, Ord k, Eq l) => G.Graph k v l -> G.Graph k v (l,l)
@@ -107,6 +138,7 @@ disambigLabel ls | E `elem` ls = Just E
                  | otherwise   = Just X
 
 ------------------------------------------------------------------------------
+------------------------------------------------------------------------------
 
 type OverlapGraph = G.Graph ItemKey ItemId ()
 
@@ -115,11 +147,22 @@ overlapGraph = G.fromEdgeList . mapMaybe f . G.toEdgeList
   where f (v1,(l1,l2),v2) 
           | l1 `elem` [O,E] || l2 `elem` [O,E] = Just (v1,(),v2)
           | otherwise = Nothing
+
 --TODO: enforce hierachical constraints!
---TODO: fix CS-CE-SE spurious overlaps
 
 type OverlapCatalogue = G.Graph ItemKey Item ()
 
 overlapCatalogue :: OverlapGraph -> Catalogue -> OverlapCatalogue
 overlapCatalogue og c = undefined
+
+{-
+overlaps = do
+  fs <- csvFiles simDir
+  gs <- loadSimLists fs
+  return . overlapGraph . pairGraph $ G.unions gs
+-}
+
+overlapingUnits g = 
+ eqClassesGen (\v -> map snd $ G.outEdges v g) (G.vertices g)
+
 

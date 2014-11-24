@@ -1,5 +1,9 @@
 module CSV
   ( Field
+  , Row
+  , CSV
+  , (!!!)
+  , getField
   , ParseError
   , readCSV
   , showCSV
@@ -14,6 +18,8 @@ import Text.Parsec
 import Text.Parsec.String
 
 type Field = String
+type Row   = [Field]
+type CSV   = [Row]
 
 ------------------------------------------------------------------------------
 -- Reading a CSV
@@ -71,8 +77,6 @@ csvQuote s | needsQuotes = "\"" ++ escape s ++ "\""
 ------------------------------------------------------------------------------
 -- Reading into a CSV
 
-xs = [(0,"A"),(1,"B"),(1,"C"),(0,"E"),(1,"F"),(0,"G"),(1,"H")] :: [(Int,String)]
-
 toForest :: [(Int,a)] -> Forest a
 toForest []          = []
 toForest ((lx,x):xs) = let (ys,zs) = break ((==lx) . fst) xs
@@ -84,3 +88,14 @@ csvToForest = toForest . map (\r -> (indentLevel r,r))
 indentLevel :: [Field] -> Int
 indentLevel = length . takeWhile null
 
+------------------------------------------------------------------------------
+-- Accessing CSV fields
+
+(!!!) :: [[a]] -> Int -> Maybe [a]
+[]     !!! _ = Nothing
+([]:_) !!! 0 = Nothing
+(x:_)  !!! 0 = Just x
+(_:xs) !!! n = xs !!! (n - 1)
+
+--getField :: CSV -> Int -> Int ->  Maybe Field
+getField ys y x =  (ys !!! y) >>= (!!! x)

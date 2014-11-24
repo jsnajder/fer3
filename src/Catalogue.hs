@@ -1,17 +1,29 @@
 {-# LANGUAGE TupleSections, TypeSynonymInstances, FlexibleInstances, MultiParamTypeClasses #-}
 
-module Catalogue where
+module Catalogue 
+  ( Catalogue (..) -- <== TODO: don't expose the graph structure!!!
+  , Item (..)
+  , ItemId (..)
+  , loadCatalogue
+  , readCatalogue
+  , readItemId
+  , showItemId
+  , splitCatalogue ) where
 
 import Control.Applicative ((<$>))
 import CSV
 import qualified Data.EdgeLabeledGraph as G
 import Data.List
 import Data.Maybe
+import Data.Function
 import qualified Data.Text as T
 import Data.Tree
 import Text.Parsec
 import Text.Parsec.String
 import Text.Printf
+
+-- TODO: Abstract Catalogue interface (it shouldn't be exposed as a graph,
+-- i.e., hide some constructors and provide operators to get items)
 
 data ItemType = CAT | KA | KU | KT deriving (Eq,Show,Enum,Read,Ord)
 
@@ -42,7 +54,14 @@ type ItemIndex = T.Text
 instance G.Vertex Item T.Text where
   index = T.pack . showItemId . itemId
 
-type Catalogue = G.Graph ItemIndex Item Link
+data Catalogue = Cat 
+  { catAreas   :: G.Graph ItemIndex Item Link
+  , catId      :: String
+  , catName    :: String
+  , catVersion :: Maybe String
+  , catDate    :: Maybe String
+  , catEditors :: [String]
+  , catRemarks :: Maybe String } deriving (Eq,Ord,Show,Read)
 
 showItemId :: ItemId -> String
 showItemId (ItemId c a (Just u) (Just t)) = printf "%s-%s%02d%03d" c a u t
@@ -63,14 +82,29 @@ parseItemId = do
   t <- optionMaybe $ count 2 digit
   return $ ItemId c a (read <$> u) (read <$> t)
 
-readCatalogue :: String -> Either ParseError Catalogue
-readCatalogue s = 
-  G.unions . map (G.fromTree (const SubItem)) . 
-  map (levelMap readItem) . csvToForest . filter (not . null) . drop 9 
-  <$> readCSV s
+loadCatalogue :: FilePath -> IO (Either ParseError Catalogue)
+loadCatalogue f = readCatalogue <$> readFile f
 
-readCatalogue2 :: String -> Either ParseError (Forest Item)
-readCatalogue2 s = 
+readCatalogue :: String -> Either ParseError Catalogue
+readCatalogue s = readCat <$> readCSV s
+
+readCat :: CSV -> Catalogue
+readCat xs = Cat
+  { catAreas   = G.unions . map (G.fromTree (const SubItem)) . 
+                 map (levelMap readItem) . csvToForest . 
+                 filter (not . null) $ drop 9 xs
+  , catId      = fromJust $ getField xs 1 2
+  , catName    = fromMaybe "" $ getField xs 2 2
+  , catVersion = getField xs 3 2
+  , catDate    = getField xs 4 2
+  , catEditors = maybeToList $ getField xs 5 2
+  , catRemarks = getField xs 6 2 }
+
+dummyCat :: Catalogue
+dummyCat = Cat G.empty "" "" Nothing Nothing [] Nothing
+
+readCatForest :: String -> Either ParseError (Forest Item)
+readCatForest s = 
   map (levelMap readItem) . csvToForest . filter (not . null) . drop 9 
   <$> readCSV s
 
@@ -87,25 +121,23 @@ readFields t ix xs = Item
   , itemRemark  = xs !!! (ix !! 2)
   , itemEditors = [xs !! (ix !! 3)] }
 
-(!!!) :: [Field] -> Int -> Maybe Field
-[]      !!! 0 = Nothing
-([]:_ ) !!! 0 = Nothing
-(x:_ )  !!! 0 = Just x
-(_:xs)  !!! n = xs !!! (n - 1)
-
-{- PUH:
-(!!!) :: [a] -> Int -> Maybe a
-[]     !!! 0 = Nothing
-(x:_ ) !!! 0 = Just x
-(_:xs) !!! n = xs !!! (n - 1)
--}
-
-
-levelMap2 :: [a -> a] -> Tree a -> Tree a
-levelMap2 [] n = n
-levelMap2 (f:fs) (Node x ns) = Node (f x) (map (levelMap2 fs) ns)
-
 levelMap :: (Int -> a -> b) -> Tree a -> Tree b
 levelMap f = lmap 0 
   where lmap l (Node x ns) = Node (f l x) (map (lmap $ l+1) ns)
+
+-- splits catalogue according to areas
+splitCatalogue :: Catalogue -> [Catalogue]
+splitCatalogue =
+  map (\es@(e:_) -> dummyCat { catAreas = G.fromEdgeList es, 
+                               catId = outCatCode e }) .  
+  groupBy ((==) `on` outCatCode) . 
+  sortBy (compare `on` outCatCode) . 
+  filter inCat .
+  G.toEdgeList  . catAreas
+  where outCatCode (v,_,_) = catCode $ itemId v
+        inCat (v1,_,v2) = catCode (itemId v1) == catCode (itemId v2)
+
+catCodes :: Catalogue -> [String]
+catCodes = nub . sort . map (catCode . itemId) . G.vertices . catAreas
+
 

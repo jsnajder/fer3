@@ -22,6 +22,7 @@ module Data.EdgeLabeledGraph
   , fromEdgeList
   , fromAdjacencyList
   , filterEdges
+  , modifyEdges
   , union 
   , unions
   , fromTree ) where
@@ -68,6 +69,10 @@ removeEdge' = undefined
 filterEdges :: (Ord k, Eq l, Vertex v k) => 
   (v -> v -> l -> Bool) -> Graph k v l -> Graph k v l
 filterEdges p = fromEdgeList . filter (\(v1,l,v2) -> p v1 v2 l) . toEdgeList
+
+modifyEdges :: (Ord k, Eq l, Vertex v k) => 
+  ((v,l,v) -> Maybe (v,l,v)) -> Graph k v l -> Graph k v l
+modifyEdges f = fromEdgeList . mapMaybe f . toEdgeList
 
 filterVertices = undefined
 
