@@ -1,7 +1,8 @@
 {-# LANGUAGE MultiParamTypeClasses, TypeSynonymInstances, FlexibleInstances #-}
 
-module LabeledGraph
-  ( Graph
+module Data.EdgeLabeledGraph
+  ( Vertex (..)
+  , Graph
   , empty
   , addVertex
   , removeVertex
@@ -9,9 +10,9 @@ module LabeledGraph
   , addEdge
   , removeEdge
   , removeEdge'
-  , getOutEdges
-  , getOutEdges'
-  , getVertex
+  , outEdges
+  , outEdges'
+  , vertex
   , vertices
   , indices
   , findIndex
@@ -19,14 +20,19 @@ module LabeledGraph
   , toEdgeList
   , toEdgeList'
   , fromEdgeList
-  , fromAdjacencyList ) where
+  , fromAdjacencyList
+  , filterEdges
+  , union 
+  , unions
+  , fromTree ) where
 
+import Data.List hiding (union)
 import qualified Data.Map as M
 import Data.Maybe
-import Data.List
+import Data.Tree
 
 -- edge-labeled graph
--- TODO: move into labaled graph and/or use established implementation
+
 data Graph k v l = Graph 
   { vertexMap :: M.Map k v
   , adjMap    :: M.Map k [(l,k)] } deriving (Eq,Ord,Show,Read)
@@ -57,25 +63,33 @@ removeEdge = undefined
 removeEdge' :: (Ord k, Eq l, Vertex v k) => k -> k -> l -> Graph k v l -> Graph k v l
 removeEdge' = undefined
 
-getVertex :: Ord k => k -> Graph k v l -> Maybe v
-getVertex k g = M.lookup k (vertexMap g)
+-- NB: this will also remove singleton vertices
+-- TODO: fix this
+filterEdges :: (Ord k, Eq l, Vertex v k) => 
+  (v -> v -> l -> Bool) -> Graph k v l -> Graph k v l
+filterEdges p = fromEdgeList . filter (\(v1,l,v2) -> p v1 v2 l) . toEdgeList
 
-getOutEdges' :: (Vertex v k, Ord k) => k -> Graph k v l -> [(l,k)]
-getOutEdges' k g = concat . maybeToList $ M.lookup k (adjMap g)
+filterVertices = undefined
 
-getOutEdges :: (Vertex v k, Ord k) => v -> Graph k v l -> [(l,v)]
-getOutEdges v g = do
-  (l,k) <- getOutEdges' (index v) g
-  let Just v' = getVertex k g
+vertex :: Ord k => k -> Graph k v l -> Maybe v
+vertex k g = M.lookup k (vertexMap g)
+
+outEdges' :: (Vertex v k, Ord k) => k -> Graph k v l -> [(l,k)]
+outEdges' k g = concat . maybeToList $ M.lookup k (adjMap g)
+
+outEdges :: (Vertex v k, Ord k) => v -> Graph k v l -> [(l,v)]
+outEdges v g = do
+  (l,k) <- outEdges' (index v) g
+  let Just v' = vertex k g
   return (l,v')
 
-getInEdges' :: (Vertex v k, Ord k) => k -> Graph k v l -> [(l,k)]
-getInEdges' k g = undefined
+inEdges' :: (Vertex v k, Ord k) => k -> Graph k v l -> [(l,k)]
+inEdges' k g = undefined
 
-vertices :: Graph k v l => [v]
+vertices :: Graph k v l -> [v]
 vertices = M.elems . vertexMap
 
-indices :: Graph k v l => [k]
+indices :: Graph k v l -> [k]
 indices = M.keys . vertexMap
 
 findVertex :: (v -> Bool) -> Graph k v l -> [v]
@@ -93,8 +107,8 @@ toEdgeList' g = do
 toEdgeList :: Ord k => Graph k v l -> [(v,l,v)]
 toEdgeList g = do
   (k1,l,k2) <- toEdgeList' g
-  let Just v1 = getVertex k1 g
-      Just v2 = getVertex k2 g
+  let Just v1 = vertex k1 g
+      Just v2 = vertex k2 g
   return (v1,l,v2)
 
 fromEdgeList :: (Vertex v k, Ord k, Eq l) => [(v,l,v)] -> Graph k v l
@@ -103,6 +117,21 @@ fromEdgeList = foldl' (\g (v1,l,v2) -> addEdge v1 v2 l g)  empty
 fromAdjacencyList :: (Vertex v k, Ord k, Eq l) => [(v,[(l,v)])] -> Graph k v l
 fromAdjacencyList xs = 
   fromEdgeList [(v1,l,v2) | (v1,lvs) <- xs, (l,v2) <- lvs ]
+
+union :: (Vertex v k, Ord k, Eq l) => Graph k v l -> Graph k v l -> Graph k v l
+union g1 g2 = foldl' (\g (v1,l,v2) -> addEdge v1 v2 l g) g1 (toEdgeList g2)
+
+unions :: (Vertex v k, Ord k, Eq l) => [Graph k v l] -> Graph k v l
+unions [] = empty
+unions gs = foldl1 union gs
+
+fromTree :: (Vertex v k, Ord k, Eq l) => (Int -> l) -> Tree v -> Graph k v l
+fromTree f = fromEdgeList . map (\(v1,d,v2) -> (v1,f d,v2)) . treeEdges
+
+treeEdges :: Tree v -> [(v,Int,v)]
+treeEdges = edges 0
+  where edges d (Node l ns) = map (\n -> (l,d,rootLabel n)) ns ++ 
+                              concatMap (edges $ d+1) ns
 
 class Vertex v k where
   index :: v -> k
