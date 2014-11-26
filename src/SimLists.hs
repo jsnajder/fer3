@@ -33,7 +33,7 @@ instance G.Vertex ItemId T.Text where
 
 dir     = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/"
 simDir  = dir </> "sim-lists"
-catFile = dir </> "csv/FER3-v0.2.csv"
+catFile = dir </> "catalogue/FER3-v0.2.csv"
 outDir  = dir </> "sim-lists-disagree/csv"
 
 csvFiles d = 
@@ -70,6 +70,7 @@ disagreementGraph :: SimGraph -> SimGraphPaired
 disagreementGraph = G.filterEdges dis . pairGraph
   where dis _ _ (l1,l2) = l1 /= l2 && 
                           (not ((l1 == E && l2 == O) || (l1 == O && l2 == E)))
+--                                (l1 == X && l2 == R) || (l1 == R && l2 == X)))
 
 csvSimList :: SimGraphPaired -> Catalogue -> CSV
 csvSimList sg c = concatMap (csvItemList sg c) . G.vertices $ catAreas c
@@ -166,4 +167,19 @@ overlaps = do
 overlapingUnits g = 
  eqClassesGen (\v -> map snd $ G.outEdges v g) (G.vertices g)
 
+{-
+generateOverlapGroups = do
+  Right c <- loadCatalogue catFile
+  fs <- csvFiles simDir
+  g  <- filterSpurious <$> loadSimLists fs
+  let o = overlapGraph g
+  return $ overlapingUnits o
+
+PLAN:
+(1) combineEdges ovelapGraph catalogue
+(2) filter only knowledgeUnits, redefine overlap with subtrees
+(3) transitive closure
+(4) ... clustering?
+
+-}
 
