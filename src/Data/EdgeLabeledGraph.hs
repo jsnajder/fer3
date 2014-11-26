@@ -25,7 +25,8 @@ module Data.EdgeLabeledGraph
   , modifyEdges
   , union 
   , unions
-  , fromTree ) where
+  , fromTree
+  , toTree ) where
 
 import Data.List hiding (union)
 import qualified Data.Map as M
@@ -138,6 +139,11 @@ treeEdges = edges 0
   where edges d (Node l ns) = map (\n -> (l,d,rootLabel n)) ns ++ 
                               concatMap (edges $ d+1) ns
 
+-- constructs a tree rootet in v, traversing edges for which label evaluates to True
+-- If the graph has dicycles, the tree will be infinite
+toTree :: (Vertex v k, Ord k) => v -> (l -> Bool) -> Graph k v l -> Tree v
+toTree v p g = Node v [toTree v p g | (l,v) <- outEdges v g, p l ]
+
 class Vertex v k where
   index :: v -> k
 
@@ -148,5 +154,7 @@ instance Vertex String String where
   index = id
 
 type IntGraph = Graph Int Int Int
+
+g = fromEdgeList [(1,12,2),(2,12,1),(2,23,3),(2,24,4)] :: IntGraph
 
 

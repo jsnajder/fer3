@@ -1,62 +1,102 @@
---import Catalogue
-import Control.Applicative ((<$>))
-import Reader.CSV
+{-# LANGUAGE TupleSections, TypeSynonymInstances, FlexibleInstances, MultiParamTypeClasses #-}
+
+module SimLists where
+
+import Catalogue
+import Control.Applicative ((<$>), liftA2)
+import Control.Monad
+import CSV (readCSV, Field)
 import Data.Char
+import qualified Data.EdgeLabeledGraph as G
+import Data.Function
 import Data.List
+import Data.List.Partition (eqClassesGen)
+import Data.List.Split (splitWhen)
 import Data.Maybe
 import qualified Data.Map as M
+import qualified Data.Text as T
+import System.Directory
+import System.Environment
+import System.FilePath
 import Text.Parsec hiding (label,labels)
 import Text.Parsec.String
 import Text.Printf
-import qualified LabeledGraph as G
 
-data SimLabel = O | X | E | R deriving (Eq,Show,Read,Ord)
-type ItemId = String
-type SimGraph = G.Graph ItemId ItemId (Maybe SimLabel)
-type SimGraphPaired = G.Graph ItemId ItemId (Maybe SimLabel, Maybe SimLabel)
+data SimLabel = X | R | O | E deriving (Eq,Show,Read,Ord)
+type ItemKey = T.Text
+type SimGraph = G.Graph ItemKey ItemId SimLabel
+type SimGraphPaired = G.Graph ItemKey ItemId (SimLabel, SimLabel)
 
-pairSimGraph :: SimGraph -> SimGraphPaired
-pairSimGraph = undefined
+instance G.Vertex ItemId T.Text where
+  index = T.pack . showItemId
 
-readSimGraph :: String -> SimGraph
-readSimGraph = G.fromAdjacencyList . readSimList
+dir = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.1/sim-lists"
 
-readSimList :: String -> [(ItemId, [(Maybe SimLabel, ItemId)])]
-readSimList s = case parse parseSimList "(unknown)" s of
-  Right c -> c
-  Left  e -> error $ show e
+diagreements = do
+  fs <- csvFiles dir
+  gs <- loadSimLists fs
+  return $ disagreementGraph gs
 
-parseSimList :: Parser [(ItemId, [(Maybe SimLabel,ItemId)])]
-parseSimList = parseItemList `sepBy1` (many1 (char ',') >> newline)
- 
-parseItemList :: Parser (ItemId, [(Maybe SimLabel,ItemId)])
-parseItemList = do
-  itemId <- parseItemId
-  nextLine
-  items <- many1 (try parseLabeledItem)
-  return (itemId,items)
+overlaps = do
+  fs <- csvFiles dir
+  gs <- loadSimLists fs
+  return . overlapGraph . pairGraph $ G.unions gs
 
-parseItemId :: Parser ItemId
-parseItemId = do
-  char '['
-  itemId <- many1 (noneOf "]")
-  char ']'
-  return itemId
+overlapUnits g = 
+ eqClassesGen (\v -> outEdges' v g) (G.vertices g)
 
-parseLabeledItem :: Parser (Maybe SimLabel,ItemId)
-parseLabeledItem = do
-  simLabel <- parseSimLabel
-  anyChar `manyTill` char ','
-  itemId <- parseItemId
-  nextLine
-  return (simLabel,itemId)
+csvFiles d = 
+  map (d </>) . filter (".sim.csv" `isSuffixOf`) <$> getDirectoryContents d
 
-parseSimLabel :: Parser (Maybe SimLabel)
-parseSimLabel = do
-  label <- many (noneOf ",")
-  char ','
-  let ambigLabels = map (read . (:[])) . filter (`elem` "XROE") $ map toUpper label
-  return $ disambigLabel ambigLabels
+loadSimLists :: [FilePath] -> IO [SimGraph]
+loadSimLists fs = do
+  forM fs $ \f -> do
+    putStrLn f
+    Right g <- readSimGraphCSV <$> readFile f
+    g `seq` return g
+
+disagreementGraph :: [SimGraph] -> SimGraphPaired
+disagreementGraph = G.filterEdges dis . pairGraph . G.unions
+  where dis _ _ (l1,l2) = l1 /= l2 && 
+                          (not ((l1 == E && l2 == O) || (l1 == O && l2 == E)))
+{-
+partitionByCat :: SimGraphPaired -> [(String,SimGraphPaired)]
+partitionByCat g = 
+  [ (edgeOutCat e, G.fromEdgeList es) | 
+    es@(e:_) <- groupBy ((==) `on` edgeOutCat) $ G.toEdgeList g ]
+  where edgeOutCat (v1,_,_) = catCode v1
+-}
+
+pairGraph :: 
+  (G.Vertex v k, Eq v, Ord k, Eq l) => G.Graph k v l -> G.Graph k v (l,l)
+pairGraph g = G.fromEdgeList $ do
+  v1       <- G.vertices g
+  (l1,v2)  <- G.outEdges v1 g
+  (l2,v1') <- G.outEdges v2 g
+  guard $ v1==v1'
+  return (v1,(l1,l2),v2)
+
+readSimGraphCSV :: String -> Either ParseError SimGraph
+readSimGraphCSV s = G.fromAdjacencyList <$> readSimListCSV s
+
+readSimListCSV
+  :: String -> Either ParseError [(ItemId, [(SimLabel, ItemId)])]
+readSimListCSV s = 
+  mapMaybe readItemList . filter (not . null) . splitWhen null <$> readCSV s
+
+readItemList :: [[Field]] -> Maybe (ItemId, [(SimLabel,ItemId)])
+readItemList ((itemId:_):items) 
+  | null items' = Nothing
+  | otherwise   = (,items') <$> readItemId' itemId
+  where readItem (label:_:itemId:_) = 
+          liftA2 (,) (readSimLabel label) (readItemId' itemId)
+        items' = mapMaybe readItem items
+
+readItemId' = readItemId . init . tail
+
+readSimLabel :: String -> Maybe SimLabel
+readSimLabel = 
+  disambigLabel . map (read . (:[])) . filter (`elem` "XROE") . map toUpper 
 
 disambigLabel :: [SimLabel] -> Maybe SimLabel
 disambigLabel []  = Nothing
@@ -66,88 +106,14 @@ disambigLabel ls | E `elem` ls = Just E
                  | R `elem` ls = Just R
                  | otherwise   = Just X
 
-{-
--- todo: find missmatches
+------------------------------------------------------------------------------
 
-showSimCatalogue :: SimCatalogue -> String
-showSimCatalogue = unlines . map showItemList . M.toList
-   where showItemList (item,labeledItems) = unlines $ 
-           showItem item : map showLabeledItem labeledItems
-         showItem item = printf "[%s],%s,,,,%s"
-           (itemId item) (csvQuote $ itemLabel item)
-           (csvQuote . intercalate ", " $ itemEditors item)
-         showLabeledItem (label,item) = printf "%s,%s,[%s],%s,%s"
-           (show label) "" (itemId item) (csvQuote $ itemLabel item)
-           (csvQuote . intercalate ", " $ itemEditors item)
+type OverlapGraph = G.Graph ItemKey ItemId ()
 
-showSimCataloguePaired :: SimCataloguePaired -> String
-showSimCataloguePaired = unlines . map showItemList . M.toList
-   where showItemList (item,labeledItems) = unlines $ 
-           showItem item : map showLabeledItem labeledItems
-         showItem item = printf "[%s],%s,,,,%s"
-           (itemId item) (csvQuote $ itemLabel item)
-           (csvQuote . intercalate ", " $ itemEditors item)
-         showLabeledItem ((label1,label2),item) = printf "%s,%s,[%s],%s,%s"
-           (show label1) 
-           (if isJust label2 then show (fromJust label2) else "") 
-           (itemId item) (csvQuote $ itemLabel item)
-           (csvQuote . intercalate ", " $ itemEditors item)
-        
-getSimLabel :: SimCatalogue -> ItemId -> ItemId -> Maybe SimLabel
-getSimLabel c id1 id2 = do
-  item1 <- getVertex ((==id1) . itemId) c
-  item2 <- getVertex ((==id2) . itemId) c
-  getEdgeLabel c item1 item2
-
-main = do
-  f1 <- readFile "../../data/catalogue/v0.1/sim-lists/FER3-IP.sim.csv"
-  f2 <- readFile "../../data/catalogue/v0.1/sim-lists/FER3-MA.sim.csv"
-  let c1 = readSimCatalogue f1
-      c2 = readSimCatalogue f2
-      c3 = pairSimCatalogues [c1,c2]
-  writeFile "tmp.csv" $ showSimCataloguePaired c3
-
-
-type SimCataloguePaired = LabeledGraph Item (SimLabel,Maybe SimLabel)
-
-pairSimCatalogues :: [SimCatalogue] -> SimCataloguePaired
-pairSimCatalogues cs = M.fromList . map addLabels $ M.toList c
-  where addLabels (item1,links) = (item1, [((l,l2),item2)
-          | (l,item2) <- links
-          , let l2 = getSimLabel c (itemId item2) (itemId item1) ])
-        c = M.unions cs
-
-
-readSimCatalogue :: String -> SimCatalogue
-readSimCatalogue s = case parse parseSimCatalogue "(unknown)" s of
-  Right c -> c
-  Left  e -> error $ show e
-
-parseSimCatalogue :: Parser SimCatalogue
-parseSimCatalogue = do
-  xs <- parseItemList `sepBy1` emptyRow
-  return $ M.fromList xs
-
-parseItemList :: Parser (Item, [(SimLabel,Item)])
-parseItemList = do
-
-parseItemId :: Parser ItemId
-parseItemId = do
-  itemId <- stringCell
-  return . tail $ init itemId
-
-parseItemEditors :: Parser [ItemEditor]
-parseItemEditors = 
-  stringSequence <$> stringCell
-
-parseItem :: Parser Item
-parseItem = do
-  itemId <- parseItemId
-  itemLabel <- stringCell
-  count 3 (char ',')
-  itemEditors <- parseItemEditors
-  return $ Item { itemId = itemId, itemType = KU, itemLabel = itemLabel
-                , itemVersion = Nothing
-                , itemEditors = itemEditors
-                , itemRemark  = Nothing }
--}
+overlapGraph :: SimGraphPaired -> OverlapGraph
+overlapGraph = G.fromEdgeList . mapMaybe f . G.toEdgeList
+  where f (v1,(l1,l2),v2) 
+          | l1 `elem` [O,E] || l2 `elem` [O,E] = Just (v1,(),v2)
+          | otherwise = Nothing
+--TODO: enforce hierachical constraints!
+ 

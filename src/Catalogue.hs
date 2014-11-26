@@ -7,8 +7,13 @@ module Catalogue
   , loadCatalogue
   , readCatalogue
   , readItemId
+  , readCatForest --tmp
   , showItemId
-  , splitCatalogue ) where
+  , splitCatalogue
+  , knowledgeItems
+  , knowledgeAreas
+  , getItem
+  , getItemTree ) where
 
 import Control.Applicative ((<$>))
 import CSV
@@ -64,7 +69,7 @@ data Catalogue = Cat
   , catRemarks :: Maybe String } deriving (Eq,Ord,Show,Read)
 
 showItemId :: ItemId -> String
-showItemId (ItemId c a (Just u) (Just t)) = printf "%s-%s%02d%03d" c a u t
+showItemId (ItemId c a (Just u) (Just t)) = printf "%s-%s%02d%02d" c a u t
 showItemId (ItemId c a (Just u) Nothing) = printf "%s-%s%02d" c a u
 showItemId (ItemId c a Nothing Nothing) = printf "%s-%s" c a
 
@@ -103,6 +108,7 @@ readCat xs = Cat
 dummyCat :: Catalogue
 dummyCat = Cat G.empty "" "" Nothing Nothing [] Nothing
 
+-- tmp
 readCatForest :: String -> Either ParseError (Forest Item)
 readCatForest s = 
   map (levelMap readItem) . csvToForest . filter (not . null) . drop 9 
@@ -139,5 +145,17 @@ splitCatalogue =
 
 catCodes :: Catalogue -> [String]
 catCodes = nub . sort . map (catCode . itemId) . G.vertices . catAreas
+
+getItem :: Catalogue -> ItemId -> Maybe Item
+getItem c x = G.vertex (T.pack $ showItemId x) (catAreas c)
+
+getItemTree :: Catalogue -> ItemId -> Maybe (Tree Item)
+getItemTree c x = (\x -> G.toTree x (==SubItem) (catAreas c)) <$> getItem c x
+
+knowledgeItems :: Catalogue -> [Item]
+knowledgeItems = G.vertices . catAreas
+
+knowledgeAreas :: Catalogue -> [Item]
+knowledgeAreas = filter ((==KA) . itemType) . knowledgeItems
 
 

@@ -21,6 +21,7 @@ import System.FilePath
 import Text.Parsec hiding (label,labels)
 import Text.Parsec.String
 import Text.Printf
+import Debug.Trace
 
 data SimLabel = X | R | O | E deriving (Eq,Show,Read,Ord)
 type ItemKey = T.Text
@@ -30,10 +31,10 @@ type SimGraphPaired = G.Graph ItemKey ItemId (SimLabel, SimLabel)
 instance G.Vertex ItemId T.Text where
   index = T.pack . showItemId
 
-dir     = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.1/"
+dir     = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/"
 simDir  = dir </> "sim-lists"
-catFile = dir </> "csv/FER3-v0.1.1.csv"
-outDir  = dir </> "sim-lists-disagree/"
+catFile = dir </> "csv/FER3-v0.2.csv"
+outDir  = dir </> "sim-lists-disagree/csv"
 
 csvFiles d = 
   map (d </>) . filter (".sim.csv" `isSuffixOf`) <$> getDirectoryContents d
@@ -95,7 +96,7 @@ splitSimGraph =
 simItems :: 
   SimGraphPaired -> Catalogue -> Item -> [(SimLabel, SimLabel, Item)]
 simItems sg cat x =
-  mapMaybe (\((l1,l2),v) -> (l1,l2,) <$> G.vertex (G.index v) (catAreas cat)) $ 
+  mapMaybe (\((l1,l2),id) -> (l1,l2,) <$> getItem cat id) $ 
   G.outEdges (itemId x) sg
 
 pairGraph :: 
@@ -119,7 +120,7 @@ readItemList :: [[Field]] -> Maybe (ItemId, [(SimLabel,ItemId)])
 readItemList ((itemId:_):items) 
   | null items' = Nothing
   | otherwise   = (,items') <$> readItemId' itemId
-  where readItem (label:_:itemId:_) = 
+  where readItem (label:_:itemId:_) =
           liftA2 (,) (readSimLabel label) (readItemId' itemId)
         items' = mapMaybe readItem items
 
