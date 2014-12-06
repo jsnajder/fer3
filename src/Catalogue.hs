@@ -4,6 +4,7 @@ module Catalogue
   ( Catalogue (..) -- <== TODO: don't expose the graph structure!!!
   , Item (..)
   , ItemId (..)
+  , ItemEditor
   , loadCatalogue
   , readCatalogue
   , readItemId
@@ -22,6 +23,7 @@ import Data.List
 import Data.Maybe
 import Data.Function
 import qualified Data.Text as T
+import Data.List.Split (splitOneOf)
 import Data.Tree
 import Text.Parsec
 import Text.Parsec.String
@@ -38,7 +40,10 @@ data ItemId = ItemId
   { catCode  :: String
   , areaCode :: String
   , unitId   :: Maybe Int
-  , topicId  :: Maybe Int } deriving (Eq,Ord,Read,Show)
+  , topicId  :: Maybe Int } deriving (Eq,Ord,Read)
+
+instance Show ItemId where
+  show = showItemId
 
 data Item = Item
   { itemId      :: ItemId
@@ -102,7 +107,7 @@ readCat xs = Cat
   , catName    = fromMaybe "" $ getField xs 2 2
   , catVersion = getField xs 3 2
   , catDate    = getField xs 4 2
-  , catEditors = maybeToList $ getField xs 5 2
+  , catEditors = concat . maybeToList $ ( readEditors <$> getField xs 5 2 )
   , catRemarks = getField xs 6 2 }
 
 dummyCat :: Catalogue
@@ -125,7 +130,10 @@ readFields t ix xs = Item
   , itemLabel   = xs !! (ix !! 1)
   , itemVersion = Nothing
   , itemRemark  = xs !!! (ix !! 2)
-  , itemEditors = [xs !! (ix !! 3)] }
+  , itemEditors = readEditors $ xs !! (ix !! 3) }
+
+readEditors :: String -> [ItemEditor]
+readEditors = map (unwords . words) . splitOneOf ",;"
 
 levelMap :: (Int -> a -> b) -> Tree a -> Tree b
 levelMap f = lmap 0 

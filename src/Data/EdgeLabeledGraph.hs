@@ -90,6 +90,9 @@ outEdges v g = do
   let Just v' = vertex k g
   return (l,v')
 
+outDegree' :: (Vertex v k, Ord k) => k -> Graph k v l -> Int
+outDegree' k = length . outEdges' k
+
 inEdges' :: (Vertex v k, Ord k) => k -> Graph k v l -> [(l,k)]
 inEdges' k g = undefined
 

@@ -10,7 +10,7 @@ import Data.Char
 import qualified Data.EdgeLabeledGraph as G
 import Data.Function
 import Data.List
-import Data.List.Partition (eqClassesGen)
+import Data.List.Partition (eqClassesGenOut)
 import Data.List.Split (splitWhen)
 import Data.Maybe
 import qualified Data.Map as M
@@ -24,12 +24,12 @@ import Text.Printf
 import Debug.Trace
 
 data SimLabel = X | R | O | E deriving (Eq,Show,Read,Ord)
-type ItemKey = T.Text
+type ItemKey = String
 type SimGraph = G.Graph ItemKey ItemId SimLabel
 type SimGraphPaired = G.Graph ItemKey ItemId (SimLabel, SimLabel)
 
-instance G.Vertex ItemId T.Text where
-  index = T.pack . showItemId
+instance G.Vertex ItemId ItemKey where
+  index = showItemId
 
 dir     = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/"
 simDir  = dir </> "sim-lists"
@@ -142,6 +142,7 @@ disambigLabel ls | E `elem` ls = Just E
 ------------------------------------------------------------------------------
 ------------------------------------------------------------------------------
 
+{-
 type OverlapGraph = G.Graph ItemKey ItemId ()
 
 overlapGraph :: SimGraphPaired -> OverlapGraph
@@ -164,17 +165,28 @@ overlaps = do
   return . overlapGraph . pairGraph $ G.unions gs
 -}
 
-overlapingUnits g = 
- eqClassesGen (\v -> map snd $ G.outEdges v g) (G.vertices g)
+--overlappingUnits g = 
+-- eqClassesGen (\v -> map snd $ G.outEdges v g) (G.vertices g)
 
-{-
-generateOverlapGroups = do
+overlappingTopics :: OverlapGraph -> [[ItemId]]
+overlappingTopics g = 
+  eqClassesGenOut (\v -> map snd $ G.outEdges v g) topics
+  where topics = filter (isJust . topicId) . G.vertices $ g
+
+overlappingUnits :: OverlapGraph -> [[ItemId]]
+overlappingUnits g = 
+  eqClassesGenOut (\v -> map snd $ G.outEdges v g) topics
+  where topics = filter isUnit. G.vertices $ g
+        isUnit x = (isJust . unitId $ x) && (topicId x == Nothing)
+
+generateUnitGroups = do
   Right c <- loadCatalogue catFile
   fs <- csvFiles simDir
   g  <- filterSpurious <$> loadSimLists fs
-  let o = overlapGraph g
-  return $ overlapingUnits o
+  let o = overlapGraph . pairGraph $ g
+  return $ overlappingUnits o
 
+{-
 PLAN:
 (1) combineEdges ovelapGraph catalogue
 (2) filter only knowledgeUnits, redefine overlap with subtrees
@@ -182,4 +194,4 @@ PLAN:
 (4) ... clustering?
 
 -}
-
+-}
