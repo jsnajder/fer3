@@ -14,7 +14,9 @@ module Catalogue
   , knowledgeItems
   , knowledgeAreas
   , getItem
-  , getItemTree ) where
+  , getItemTree
+  , getItemArea 
+  , csvKnowledgeUnit ) where
 
 import Control.Applicative ((<$>))
 import CSV
@@ -157,8 +159,20 @@ catCodes = nub . sort . map (catCode . itemId) . G.vertices . catAreas
 getItem :: Catalogue -> ItemId -> Maybe Item
 getItem c x = G.vertex (T.pack $ showItemId x) (catAreas c)
 
-getItemTree :: Catalogue -> ItemId -> Maybe (Tree Item)
+type CatalogueTree = Tree Item
+
+getItemTree :: Catalogue -> ItemId -> Maybe CatalogueTree
 getItemTree c x = (\x -> G.toTree x (==SubItem) (catAreas c)) <$> getItem c x
+
+-- katastrofalan kod...
+--getItemParent :: Catalogue -> ItemId -> Maybe Item
+getItemParent c x =
+  (listToMaybe . map (readItemId . T.unpack . snd) . filter ((==SubItem) . fst) . G.inEdges' (T.pack $ showItemId x) $ catAreas c) 
+--  >>= getItem c . readItemId
+
+-- with path from the root
+getItemTree' :: Catalogue -> ItemId -> Maybe CatalogueTree
+getItemTree' c x = undefined --getItemTree c x
 
 knowledgeItems :: Catalogue -> [Item]
 knowledgeItems = G.vertices . catAreas
@@ -166,4 +180,46 @@ knowledgeItems = G.vertices . catAreas
 knowledgeAreas :: Catalogue -> [Item]
 knowledgeAreas = filter ((==KA) . itemType) . knowledgeItems
 
+-- TODO: generalize so that it works with topics and areas...
+addArea :: Catalogue -> CatalogueTree -> CatalogueTree
+addArea c n@(Node x ns) = case getItemArea c (itemId x) of
+  Nothing -> n
+  Just x' -> Node x' [n]
+
+getItemArea :: Catalogue -> ItemId -> Maybe Item
+getItemArea c x = getItem c $ x { unitId = Nothing, topicId = Nothing }
+
+csvKnowledgeUnit :: Catalogue -> ItemId -> Maybe CSV
+csvKnowledgeUnit c x = csv . addArea c <$> getItemTree c x
+  where csv (Node x ns) = csvItem x : concatMap csv ns
+        
+csvItem :: Item -> Row
+csvItem x
+  | itemType x == KA =
+      [showItemId $ itemId x,itemLabel x,"","","","",
+       fromMaybe "" $ itemRemark x,showItemEditors x]
+  | itemType x == KU =
+      ["","",showItemId $ itemId x,itemLabel x,"","",
+       fromMaybe "" $ itemRemark x,showItemEditors x]
+  | itemType x == KT =
+      ["","","","",showItemId $ itemId x,itemLabel x,
+       fromMaybe "" $ itemRemark x,showItemEditors x]
+        
+showItemEditors :: Item -> String
+showItemEditors = intercalate ", " . itemEditors
+
+-- todo: csvCatalogue
+
+modifyItem :: Catalogue -> ItemId -> (Item -> Item) -> Catalogue
+modifyItem c x f =
+  c { catAreas = G.modifyVertex g $ catAreas c }
+  where g y | itemId y == x = Just $ f y
+            | otherwise     = Nothing
+
+addItemRemark :: Catalogue -> ItemId -> String -> Catalogue
+addItemRemark c x r = modifyItem c x addRemark
+  where addRemark x = x  
+          { itemRemark = case itemRemark x of
+              Nothing -> Just r 
+              Just r' -> Just $ r ++ "/n" ++ r' }
 

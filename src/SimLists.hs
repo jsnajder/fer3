@@ -32,12 +32,12 @@ instance G.Vertex ItemId ItemKey where
   index = showItemId
 
 dir     = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/"
-simDir  = dir </> "sim-lists"
+simDir  = dir </> "sim-lists-corr"
 catFile = dir </> "catalogue/FER3-v0.2.csv"
 outDir  = dir </> "sim-lists-disagree/csv"
 
 csvFiles d = 
-  map (d </>) . filter (".sim.csv" `isSuffixOf`) <$> getDirectoryContents d
+  map (d </>) . filter (".csv" `isSuffixOf`) <$> getDirectoryContents d
 
 loadSimLists :: [FilePath] -> IO SimGraph
 loadSimLists fs = G.unions <$> do
@@ -59,12 +59,14 @@ generateDisagreementLists = do
 
 -- filters out some spurious labelings
 filterSpurious :: SimGraph -> SimGraph
-filterSpurious = G.filterEdges (\v1 v2 l -> not $ f v1 v2 l)
-  where f v1 v2 l = catCode v1 `elem` ["CS","CE","SE"] &&
-                    catCode v2 `elem` ["CS","CE","SE"] &&
-                    catCode v1 /= catCode v2 &&
-                    areaCode v1 == areaCode v2 &&
-                    unitId v1 /= unitId v2
+filterSpurious = G.filterEdges (\v1 v2 _ -> not $ spuriousMatch v1 v2)
+  
+spuriousMatch x1 x2 = 
+  catCode x1 `elem` ["CS","CE","SE"] &&
+  catCode x2 `elem` ["CS","CE","SE"] &&
+  catCode x1 /= catCode x2 &&
+  areaCode x1 == areaCode x2 &&
+  unitId x1 /= unitId x2
 
 disagreementGraph :: SimGraph -> SimGraphPaired
 disagreementGraph = G.filterEdges dis . pairGraph
@@ -125,7 +127,9 @@ readItemList ((itemId:_):items)
           liftA2 (,) (readSimLabel label) (readItemId' itemId)
         items' = mapMaybe readItem items
 
-readItemId' = readItemId . init . tail
+readItemId' s | head s == '[' = readItemId . init $ tail s
+              | otherwise     = readItemId s
+
 
 readSimLabel :: String -> Maybe SimLabel
 readSimLabel = 

@@ -1,12 +1,13 @@
 module CSV
   ( Field
   , Row
-  , CSV
+  , CSV -- todo: rename to "table"
   , (!!!)
   , getField
   , ParseError
   , readCSV
   , showCSV
+  , printCSV
   , csvToForest ) where
 
 import Control.Applicative ((<$>))
@@ -66,6 +67,9 @@ eol =   try (string "\n\r")
 showCSV :: [[Field]] -> String
 showCSV = unlines . map (intercalate "," . map csvQuote)
 
+printCSV :: CSV -> IO ()
+printCSV = putStr . showCSV
+
 csvQuote :: String -> String
 csvQuote s | needsQuotes = "\"" ++ escape s ++ "\""
            | otherwise   = s
@@ -99,3 +103,4 @@ indentLevel = length . takeWhile null
 
 --getField :: CSV -> Int -> Int ->  Maybe Field
 getField ys y x =  (ys !!! y) >>= (!!! x)
+

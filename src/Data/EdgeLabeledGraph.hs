@@ -12,6 +12,7 @@ module Data.EdgeLabeledGraph
   , removeEdge'
   , outEdges
   , outEdges'
+  , inEdges'
   , vertex
   , vertices
   , indices
@@ -27,7 +28,8 @@ module Data.EdgeLabeledGraph
   , unions
   , fromTree
   , toTree
-  , combineEdges ) where
+  , combineEdges
+  , modifyVertex ) where
 
 import Data.List hiding (union)
 import qualified Data.Map as M
@@ -76,6 +78,13 @@ modifyEdges :: (Ord k, Eq l, Vertex v k) =>
   ((v,l,v) -> Maybe (v,l,v)) -> Graph k v l -> Graph k v l
 modifyEdges f = fromEdgeList . mapMaybe f . toEdgeList
 
+modifyVertex :: (Vertex v k, Ord k, Eq l) => 
+  (v -> Maybe v) -> Graph k v l -> Graph k v l
+modifyVertex f = fromEdgeList . map g . toEdgeList
+  where g e@(v1,l,v2) = case f v1 of
+          Just v1' -> (v1',l,v2)
+          Nothing  -> e
+
 filterVertices = undefined
 
 vertex :: Ord k => k -> Graph k v l -> Maybe v
@@ -94,7 +103,7 @@ outDegree' :: (Vertex v k, Ord k) => k -> Graph k v l -> Int
 outDegree' k = length . outEdges' k
 
 inEdges' :: (Vertex v k, Ord k) => k -> Graph k v l -> [(l,k)]
-inEdges' k g = undefined
+inEdges' k g = [ (l,k1) | (k1,l,k2) <- toEdgeList' g, k2==k ]
 
 vertices :: Graph k v l -> [v]
 vertices = M.elems . vertexMap
