@@ -101,7 +101,7 @@ analyseOverlaps = do
     , printf "size-%d-splitted components: %d" maxComponentSize (length oc')
     , printf "components size histogram: %s" (show $ C.counts xs')
     , printf "longest shortest paths histogram: %s" (show $ C.counts pl)
-    , printf "articulation points splitted: %d" a
+    , printf "articulation points split: %d" a
     , printf "articulation points multiplicity histogram: %s" (show $ C.counts zs)
     , printf "number of groups: %d" (length gs)
     , printf "group sizes (by components) histogram: %s" (show $ C.counts gcs) 
