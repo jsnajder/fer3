@@ -4,6 +4,7 @@ module Catalogue
   ( Catalogue (..) -- <== TODO: don't expose the graph structure!!!
   , Item (..)
   , ItemId (..)
+  , Link (..) -- <== tmp
   , ItemEditor
   , loadCatalogue
   , readCatalogue
@@ -13,10 +14,14 @@ module Catalogue
   , splitCatalogue
   , knowledgeItems
   , knowledgeAreas
+  , knowledgeUnits
   , getItem
   , getItemTree
   , getItemArea 
-  , csvKnowledgeUnit ) where
+  , csvCatalogueSubset
+  , rootNode
+  , addItemRemark
+  , getTreeWithItems ) where
 
 import Control.Applicative ((<$>))
 import CSV
@@ -55,8 +60,19 @@ data Item = Item
   , itemEditors :: [ItemEditor]
   , itemRemark  :: Maybe String } deriving (Eq,Show,Read,Ord)
 
+rootNode :: Item
+rootNode = Item
+  { itemId = ItemId { catCode = "FER3"
+                    , areaCode = "", unitId = Nothing, topicId = Nothing }
+  , itemType    = CAT
+  , itemLabel   = ""
+  , itemVersion = Nothing
+  , itemEditors = []
+  , itemRemark  = Nothing }
+
 data Link
-  = SubItem 
+  = SubItem
+  | Overlaps
   | Related
   | Prereq
   | Alias deriving (Eq,Ord,Show,Read)
@@ -83,7 +99,7 @@ showItemId (ItemId c a Nothing Nothing) = printf "%s-%s" c a
 readItemId :: String -> Maybe ItemId
 readItemId s = case parse parseItemId "" s of
   Right id -> Just id
-  _        -> Nothing
+  _        -> error $ "Cannot read ItemId " ++ s
 
 parseItemId :: Parser ItemId
 parseItemId = do
@@ -102,9 +118,11 @@ readCatalogue s = readCat <$> readCSV s
 
 readCat :: CSV -> Catalogue
 readCat xs = Cat
-  { catAreas   = G.unions . map (G.fromTree (const SubItem)) . 
-                 map (levelMap readItem) . csvToForest . 
-                 filter (not . null) $ drop 9 xs
+  { catAreas   = let ts = map (levelMap readItem) . csvToForest . 
+                          filter (not . null) $ drop 9 xs
+                     as = map rootLabel ts
+                     g0 = G.fromEdgeList $ map (rootNode,SubItem,) as :: G.Graph ItemIndex Item Link
+                 in G.unions $ g0 : map (G.fromTree $ const SubItem) ts
   , catId      = fromJust $ getField xs 1 2
   , catName    = fromMaybe "" $ getField xs 2 2
   , catVersion = getField xs 3 2
@@ -164,21 +182,24 @@ type CatalogueTree = Tree Item
 getItemTree :: Catalogue -> ItemId -> Maybe CatalogueTree
 getItemTree c x = (\x -> G.toTree x (==SubItem) (catAreas c)) <$> getItem c x
 
--- katastrofalan kod...
---getItemParent :: Catalogue -> ItemId -> Maybe Item
-getItemParent c x =
-  (listToMaybe . map (readItemId . T.unpack . snd) . filter ((==SubItem) . fst) . G.inEdges' (T.pack $ showItemId x) $ catAreas c) 
---  >>= getItem c . readItemId
-
 -- with path from the root
 getItemTree' :: Catalogue -> ItemId -> Maybe CatalogueTree
 getItemTree' c x = undefined --getItemTree c x
+
+getTreeWithItems :: Catalogue -> [ItemId] -> [CatalogueTree]
+getTreeWithItems c xs = 
+  map (filterTree2 (\x -> itemId x `elem` xs)) ts
+  where ts  = mapMaybe (getItemTree c) . sort . nub $
+              map (\x -> x {unitId = Nothing, topicId = Nothing}) xs
 
 knowledgeItems :: Catalogue -> [Item]
 knowledgeItems = G.vertices . catAreas
 
 knowledgeAreas :: Catalogue -> [Item]
 knowledgeAreas = filter ((==KA) . itemType) . knowledgeItems
+
+knowledgeUnits :: Catalogue -> [Item]
+knowledgeUnits = filter ((==KU) . itemType) . knowledgeItems
 
 -- TODO: generalize so that it works with topics and areas...
 addArea :: Catalogue -> CatalogueTree -> CatalogueTree
@@ -189,21 +210,34 @@ addArea c n@(Node x ns) = case getItemArea c (itemId x) of
 getItemArea :: Catalogue -> ItemId -> Maybe Item
 getItemArea c x = getItem c $ x { unitId = Nothing, topicId = Nothing }
 
+{-
 csvKnowledgeUnit :: Catalogue -> ItemId -> Maybe CSV
 csvKnowledgeUnit c x = csv . addArea c <$> getItemTree c x
   where csv (Node x ns) = csvItem x : concatMap csv ns
-        
-csvItem :: Item -> Row
-csvItem x
+-}
+
+csvCatalogueSubset :: Catalogue -> [ItemId] -> CSV
+csvCatalogueSubset c = concatMap (csvCatalogueTree c) . getTreeWithItems c
+
+csvCatalogueTree :: Catalogue -> CatalogueTree -> CSV
+csvCatalogueTree c (Node x ns) = csvItem c x : concatMap (csvCatalogueTree c) ns
+ 
+csvItem :: Catalogue -> Item -> Row
+csvItem c x
   | itemType x == KA =
       [showItemId $ itemId x,itemLabel x,"","","","",
-       fromMaybe "" $ itemRemark x,showItemEditors x]
+       fromMaybe "" $ itemRemark x,showItemEditors x,overlaps]
   | itemType x == KU =
       ["","",showItemId $ itemId x,itemLabel x,"","",
-       fromMaybe "" $ itemRemark x,showItemEditors x]
+       fromMaybe "" $ itemRemark x,showItemEditors x,overlaps]
   | itemType x == KT =
       ["","","","",showItemId $ itemId x,itemLabel x,
-       fromMaybe "" $ itemRemark x,showItemEditors x]
+       fromMaybe "" $ itemRemark x,showItemEditors x,overlaps]
+  where overlaps = intercalate ", " $ 
+                   map (showItemId . snd) . filter ((==Overlaps) . fst) $ itemLinks c x
+
+itemLinks :: Catalogue -> Item -> [(Link,ItemId)]
+itemLinks c x = map (\(l,x) -> (l,itemId x)) $ G.outEdges x (catAreas c)
         
 showItemEditors :: Item -> String
 showItemEditors = intercalate ", " . itemEditors
@@ -211,10 +245,9 @@ showItemEditors = intercalate ", " . itemEditors
 -- todo: csvCatalogue
 
 modifyItem :: Catalogue -> ItemId -> (Item -> Item) -> Catalogue
-modifyItem c x f =
-  c { catAreas = G.modifyVertex g $ catAreas c }
-  where g y | itemId y == x = Just $ f y
-            | otherwise     = Nothing
+modifyItem c x f = case getItem c x of
+  Just x' -> c { catAreas = G.modifyVertex x' f $ catAreas c }
+  Nothing -> c
 
 addItemRemark :: Catalogue -> ItemId -> String -> Catalogue
 addItemRemark c x r = modifyItem c x addRemark
@@ -222,4 +255,14 @@ addItemRemark c x r = modifyItem c x addRemark
           { itemRemark = case itemRemark x of
               Nothing -> Just r 
               Just r' -> Just $ r ++ "/n" ++ r' }
+
+filterTree :: Eq a => (a -> Bool) -> Tree a -> Tree a
+filterTree p (Node x ns) = 
+  Node x . map (filterTree p) $ filter (any p . flatten) ns
+
+-- includes hanging substrees
+filterTree2 :: Eq a => (a -> Bool) -> Tree a -> Tree a
+filterTree2 p n@(Node x ns) 
+  | p x       = n
+  | otherwise = Node x . map (filterTree2 p) $ filter (any p . flatten) ns
 

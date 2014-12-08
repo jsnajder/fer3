@@ -68,8 +68,17 @@ spuriousMatch x1 x2 =
   areaCode x1 == areaCode x2 &&
   unitId x1 /= unitId x2
 
+-- add CS-CE-SE edges
+addCompEdges :: SimGraph -> SimGraph
+addCompEdges g = g `G.union` G.fromEdgeList es
+  where p x = catCode x `elem` ["CS","CE","SE"] && isJust (unitId x) && isNothing (topicId x)
+        es = [(x,E,y)  | x <- G.vertices g, p x, y <- G.findVertex (matches x) g ]
+        matches x y = catCode y `elem` ["CS","CE","SE"] && catCode x /= catCode y &&
+                      areaCode x == areaCode y && unitId x == unitId y &&
+                      isNothing (topicId y)
+
 disagreementGraph :: SimGraph -> SimGraphPaired
-disagreementGraph = G.filterEdges dis . pairGraph
+disagreementGraph = G.filterEdges dis . pairGraph2
   where dis _ _ (l1,l2) = l1 /= l2 && 
                           (not ((l1 == E && l2 == O) || (l1 == O && l2 == E)))
 --                                (l1 == X && l2 == R) || (l1 == R && l2 == X)))
@@ -111,6 +120,15 @@ pairGraph g = G.fromEdgeList $ do
   guard $ v1==v1'
   return (v1,(l1,l2),v2)
 
+-- if you don't find a complementary edge, insert one with the same label
+pairGraph2 :: 
+  (G.Vertex v k, Eq v, Ord k, Eq l) => G.Graph k v l -> G.Graph k v (l,l)
+pairGraph2 g = G.fromEdgeList $ do
+  v1       <- G.vertices g
+  (l1,v2)  <- G.outEdges v1 g
+  let Just (l2,v1') = find (\(_,v1') -> v1'==v1) (G.outEdges v1 g ++ [(l1,v1)])
+  return (v1,(l1,l2),v2)
+
 readSimGraphCSV :: String -> Either ParseError SimGraph
 readSimGraphCSV s = G.fromAdjacencyList <$> readSimListCSV s
 
@@ -143,59 +161,3 @@ disambigLabel ls | E `elem` ls = Just E
                  | R `elem` ls = Just R
                  | otherwise   = Just X
 
-------------------------------------------------------------------------------
-------------------------------------------------------------------------------
-
-{-
-type OverlapGraph = G.Graph ItemKey ItemId ()
-
-overlapGraph :: SimGraphPaired -> OverlapGraph
-overlapGraph = G.fromEdgeList . mapMaybe f . G.toEdgeList
-  where f (v1,(l1,l2),v2) 
-          | l1 `elem` [O,E] || l2 `elem` [O,E] = Just (v1,(),v2)
-          | otherwise = Nothing
-
---TODO: enforce hierachical constraints!
-
-type OverlapCatalogue = G.Graph ItemKey Item ()
-
-overlapCatalogue :: OverlapGraph -> Catalogue -> OverlapCatalogue
-overlapCatalogue og c = undefined
-
-{-
-overlaps = do
-  fs <- csvFiles simDir
-  gs <- loadSimLists fs
-  return . overlapGraph . pairGraph $ G.unions gs
--}
-
---overlappingUnits g = 
--- eqClassesGen (\v -> map snd $ G.outEdges v g) (G.vertices g)
-
-overlappingTopics :: OverlapGraph -> [[ItemId]]
-overlappingTopics g = 
-  eqClassesGenOut (\v -> map snd $ G.outEdges v g) topics
-  where topics = filter (isJust . topicId) . G.vertices $ g
-
-overlappingUnits :: OverlapGraph -> [[ItemId]]
-overlappingUnits g = 
-  eqClassesGenOut (\v -> map snd $ G.outEdges v g) topics
-  where topics = filter isUnit. G.vertices $ g
-        isUnit x = (isJust . unitId $ x) && (topicId x == Nothing)
-
-generateUnitGroups = do
-  Right c <- loadCatalogue catFile
-  fs <- csvFiles simDir
-  g  <- filterSpurious <$> loadSimLists fs
-  let o = overlapGraph . pairGraph $ g
-  return $ overlappingUnits o
-
-{-
-PLAN:
-(1) combineEdges ovelapGraph catalogue
-(2) filter only knowledgeUnits, redefine overlap with subtrees
-(3) transitive closure
-(4) ... clustering?
-
--}
--}

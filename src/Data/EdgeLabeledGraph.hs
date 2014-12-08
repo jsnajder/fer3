@@ -29,6 +29,7 @@ module Data.EdgeLabeledGraph
   , fromTree
   , toTree
   , combineEdges
+  , findVertex
   , modifyVertex ) where
 
 import Data.List hiding (union)
@@ -79,11 +80,8 @@ modifyEdges :: (Ord k, Eq l, Vertex v k) =>
 modifyEdges f = fromEdgeList . mapMaybe f . toEdgeList
 
 modifyVertex :: (Vertex v k, Ord k, Eq l) => 
-  (v -> Maybe v) -> Graph k v l -> Graph k v l
-modifyVertex f = fromEdgeList . map g . toEdgeList
-  where g e@(v1,l,v2) = case f v1 of
-          Just v1' -> (v1',l,v2)
-          Nothing  -> e
+  v -> (v -> v) -> Graph k v l -> Graph k v l
+modifyVertex v f g = g { vertexMap = M.adjust f (index v) (vertexMap g) }
 
 filterVertices = undefined
 
