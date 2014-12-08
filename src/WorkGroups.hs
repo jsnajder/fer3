@@ -53,7 +53,7 @@ sccGraphs g = [ delNodes ys g | xs <- scc g, let ys = ns \\ xs ]
 loadOverlapGraph = do
   Right c <- loadCatalogue catFile
   fs <- csvFiles simDir
-  g  <- addCompEdges . filterSpurious <$> loadSimLists fs
+  g  <- addCompEdges c . filterSpurious <$> loadSimLists fs
   let og = mkOverlapGraph . pairGraph2 $ g
   return $ og
 
@@ -92,7 +92,7 @@ analyseOverlaps = do
        a   = length . nub $ concatMap nodes oc' \\ concatMap nodes oc
        zs  = C.fromList . map snd . C.counts . C.fromList $ concatMap nodes oc'
        gs  = mkGroups cat $ overlapComponents og
---       ges = C.fromList $ map (length . snd) gs
+       ges = C.fromList $ map (length . nub . concatMap (componentEditors cat)) gs
        gcs = C.fromList $ map length gs
   putStr . unlines $
     [ printf "%d non-singleton components" (length oc) 
@@ -102,10 +102,10 @@ analyseOverlaps = do
     , printf "components size histogram: %s" (show $ C.counts xs')
     , printf "longest shortest paths histogram: %s" (show $ C.counts pl)
     , printf "articulation points splitted: %d" a
-    , printf "node multiplicity histogram: %s" (show $ C.counts zs)
+    , printf "articulation points multiplicity histogram: %s" (show $ C.counts zs)
     , printf "number of groups: %d" (length gs)
-    , printf "group sizes (by components) histogram: %s" (show $ C.counts gcs) ]
---    , printf "group sizes (by editors) histogram: %s" (show $ C.counts ges) ]
+    , printf "group sizes (by components) histogram: %s" (show $ C.counts gcs) 
+    , printf "group sizes (by editors) histogram: %s" (show $ C.counts ges) ]
 
 longestShortestPath :: Gr a b -> Int
 longestShortestPath g = maximum $ map (longest g) (nodes g)

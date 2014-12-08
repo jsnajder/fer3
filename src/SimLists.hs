@@ -69,10 +69,11 @@ spuriousMatch x1 x2 =
   unitId x1 /= unitId x2
 
 -- add CS-CE-SE edges
-addCompEdges :: SimGraph -> SimGraph
-addCompEdges g = g `G.union` G.fromEdgeList es
-  where p x = catCode x `elem` ["CS","CE","SE"] && isJust (unitId x) && isNothing (topicId x)
-        es = [(x,E,y)  | x <- G.vertices g, p x, y <- G.findVertex (matches x) g ]
+addCompEdges :: Catalogue -> SimGraph -> SimGraph
+addCompEdges c g = g `G.union` G.fromEdgeList es
+  where kus = filter ((`elem` ["CS","CE","SE"]) . catCode) . 
+              map itemId $ knowledgeUnits c
+        es  = [(x,E,y)  | x <- kus, y <- filter (matches x) kus ]
         matches x y = catCode y `elem` ["CS","CE","SE"] && catCode x /= catCode y &&
                       areaCode x == areaCode y && unitId x == unitId y &&
                       isNothing (topicId y)
