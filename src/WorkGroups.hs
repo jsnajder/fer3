@@ -152,13 +152,13 @@ csvOverlapComponent c oc@(i,zs) =
 csvOverlapComponent :: Catalogue -> OverlapComponent -> CSV 
 csvOverlapComponent c oc@(i,zs) = 
   [printf "COMPONENT %d (contains %d KUs)" i (length zs)] : 
-  [printf "SUBCATS (%d): %s" (length as) as] :
-  [printf "EDITORS (%d): %s" (length editors) editors] : [w] : [] : 
+  [printf "SUBCATS (%d): %s" (length as) (intercalate ", " as)] :
+  [printf "EDITORS (%d): %s" (length editors) (intercalate ", " editors)] : [w] : [] : 
   ["KA Id","KA Name","KU Id","KU Name","KT Id","KT Name","Comment","Editors","Overlaps"] :
   csvCatalogueSubset c2 units
   where units = map (\(x,_) -> x) zs
-        editors = intercalate ", " $ componentEditors c oc
-        as = intercalate ", " $ componentCats c oc
+        editors = componentEditors c oc
+        as = componentCats c oc
         hasRepeated = any (\(_,xs) -> not $ null xs) zs
         w = if hasRepeated then "WARNING: This component shares some KUs with other components (see remarks in column G)" else ""
         r z = if null z then "" else
