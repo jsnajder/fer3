@@ -154,7 +154,7 @@ csvOverlapComponent c oc@(i,zs) =
   [printf "COMPONENT %d (contains %d KUs)" i (length zs)] : 
   [printf "SUBCATS (%d): %s" (length as) (intercalate ", " as)] :
   [printf "EDITORS (%d): %s" (length editors) (intercalate ", " editors)] : [w] : [] : 
-  ["KA Id","KA Name","KU Id","KU Name","KT Id","KT Name","Comment","Editors","Overlaps"] :
+  ["KA Id","KA Name","KU Id","KU Name","KT Id","KT Name","Comment","Editors","Overlaps"] :  [] :
   csvCatalogueSubset c2 units
   where units = map (\(x,_) -> x) zs
         editors = componentEditors c oc

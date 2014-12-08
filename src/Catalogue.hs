@@ -254,7 +254,7 @@ addItemRemark c x r = modifyItem c x addRemark
   where addRemark x = x  
           { itemRemark = case itemRemark x of
               Nothing -> Just r 
-              Just r' -> Just $ r ++ "/n" ++ r' }
+              Just r' -> Just $ r ++ "; " ++ r' }
 
 filterTree :: Eq a => (a -> Bool) -> Tree a -> Tree a
 filterTree p (Node x ns) = 
