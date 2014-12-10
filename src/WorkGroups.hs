@@ -165,9 +165,21 @@ csvOverlapComponent c oc@(i,zs) =
                 printf "SHARED WITH COMPONENTS: %s" (intercalate ", " $ map show z)
         c2 = foldl' (\c (x,z) -> addItemRemark c x (r z)) c zs
 
-componentsDir = dir </> "components"
+componentsCsvDir = dir </> "components-csv"
+componentsFile = dir </> "components/FER3-v0.2-components.txt"
 
 main = do
+  Right c <- loadCatalogue catFile
+  gs <- loadComponents
+  forM_ (zip [(0::Int)..] gs) $ \(i,ocs) -> do
+    forM_ ocs $ \oc@(j,_) -> do 
+      let csv = csvOverlapComponent c oc
+      writeFile (componentsCsvDir </> printf "g%03d-c%03d.csv" i j) (showCSV csv)
+
+loadComponents :: IO [[OverlapComponent]]
+loadComponents = read <$> readFile componentsFile
+
+generateComponents = do
   og <- loadOverlapGraph
   Right c' <- loadCatalogue catFile
   let c   = addOverlapLinks og c'
@@ -175,8 +187,41 @@ main = do
       rest = map itemId (knowledgeUnits c) \\ concatMap (map fst . snd) ocs
       restComp = (0, map (\x -> (x,[])) rest)
       gs  = [restComp] : mkGroups c ocs
-  forM_ (zip [(0::Int)..] gs) $ \(i,ocs) -> do
-    forM_ ocs $ \oc@(j,_) -> do 
-      let csv = csvOverlapComponent c oc
-      writeFile (componentsDir </> printf "g%03d-c%03d.csv" i j) (showCSV csv)
+  writeFile componentsFile $ show gs
 
+generateIndex = do
+  gs <- tail <$> loadComponents
+  Right c <- loadCatalogue catFile
+  let h = ["Group", "Component", "Filename", "Component size", 
+           "Component subcats", "Component editors", "Component units" ]
+      h1 = "Editor" : h
+      h2 = "Subcats" : h
+      h3 = "KU" : h
+      xs = sort $ [ [e,show i,show j, printf "g%03d-c%03d.csv" i j,
+             show $ length kus,
+             intercalate ", " as,intercalate ", " es,
+             intercalate ", " $ map (showItemId . fst) kus ] | 
+             (i,ocs) <- zip [(1::Int)..] gs, oc@(j,kus) <- ocs, 
+             let as = componentCats c oc,
+             let es = componentEditors c oc,
+             e <- es ]
+      ys = sort $ [ [a,show i,show j, printf "g%03d-c%03d.csv" i j,
+             show $ length kus,
+             intercalate ", " as,intercalate ", " es,
+             intercalate ", " $ map (showItemId . fst) kus ] | 
+             (i,ocs) <- zip [(1::Int)..] gs, oc@(j,kus) <- ocs, 
+             let as = componentCats c oc,
+             let es = componentEditors c oc,
+             a <- as ]
+      zs = sort $ [ [ku,show i,show j, printf "g%03d-c%03d.csv" i j,
+             show $ length kus,
+             intercalate ", " as,intercalate ", " es,
+             intercalate ", " $ map (showItemId . fst) kus ] | 
+             (i,ocs) <- zip [(1::Int)..] gs, oc@(j,kus) <- ocs, 
+             let as = componentCats c oc,
+             let es = componentEditors c oc,
+             ku <- map (showItemId . fst) kus ]
+  writeFile (componentsCsvDir </> "index-editors.csv") $ showCSV (h1:xs)
+  writeFile (componentsCsvDir </> "index-subcats.csv") $ showCSV (h2:ys)
+  writeFile (componentsCsvDir </> "index-kus.csv") $ showCSV (h3:zs)
+      

@@ -47,10 +47,12 @@ data ItemId = ItemId
   { catCode  :: String
   , areaCode :: String
   , unitId   :: Maybe Int
-  , topicId  :: Maybe Int } deriving (Eq,Ord,Read)
+  , topicId  :: Maybe Int } deriving (Eq,Ord,Read,Show)
 
+{-
 instance Show ItemId where
   show = showItemId
+-}
 
 data Item = Item
   { itemId      :: ItemId
