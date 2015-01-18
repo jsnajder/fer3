@@ -17,6 +17,7 @@ module Data.EdgeLabeledGraph
   , vertices
   , indices
   , findIndex
+  , updateKeys
   , toAdjacencyList'
   , toEdgeList
   , toEdgeList'
@@ -59,7 +60,7 @@ addEdge :: (Ord k, Eq l, Vertex v k) =>
   v -> v -> l -> Graph k v l -> Graph k v l
 addEdge v1 v2 l g = g 
   { vertexMap = M.insert k2 v2 . M.insert k1 v1 $ vertexMap g
-  , adjMap    = M.insertWith (\x y -> nub $ x ++ y) k1 [(l,k2)] (adjMap g) }
+  , adjMap    = M.insertWith (\x y -> nub $ y ++ x) k1 [(l,k2)] (adjMap g) }
   where k1 = index v1
         k2 = index v2
 
@@ -135,6 +136,11 @@ fromAdjacencyList :: (Vertex v k, Ord k, Eq l) => [(v,[(l,v)])] -> Graph k v l
 fromAdjacencyList xs = 
   fromEdgeList [(v1,l,v2) | (v1,lvs) <- xs, (l,v2) <- lvs ]
 
+updateKeys :: (Ord k, Eq l) => (k -> k) -> Graph k v l -> Graph k v l
+updateKeys f g = Graph 
+  { vertexMap = M.mapKeys f $ vertexMap g
+  , adjMap    = M.mapKeys f (M.map (nub . map (\(l,k2) -> (l,f k2))) $ adjMap g) }
+
 union :: (Vertex v k, Ord k, Eq l) => Graph k v l -> Graph k v l -> Graph k v l
 union g1 g2 = foldl' (\g (v1,l,v2) -> addEdge v1 v2 l g) g1 (toEdgeList g2)
 
@@ -150,7 +156,7 @@ treeEdges = edges 0
   where edges d (Node l ns) = map (\n -> (l,d,rootLabel n)) ns ++ 
                               concatMap (edges $ d+1) ns
 
--- constructs a tree rootet in v, traversing edges for which label evaluates to True
+-- constructs a tree rooted in v, traversing edges for which label evaluates to True
 -- If the graph has dicycles, the tree will be infinite
 toTree :: (Vertex v k, Ord k) => v -> (l -> Bool) -> Graph k v l -> Tree v
 toTree v p g = Node v [toTree v p g | (l,v) <- outEdges v g, p l ]
@@ -173,5 +179,11 @@ instance Vertex String String where
 type IntGraph = Graph Int Int Int
 
 g = fromEdgeList [(1,12,2),(2,12,1),(2,23,3),(2,24,4)] :: IntGraph
+
+-- add: to/from functional graph transformations
+-- zapravo, ne, napravi novu verziju ovoga, tako da bude LIGHTWEIGHT omotač
+-- oko FG-a. Trebaš pohranjivati node map (to već postoji, ali možda napravi
+-- svoje) i trebaš pohranjivati key to node map
+
 
 

@@ -4,6 +4,7 @@ module CSV
   , CSV -- todo: rename to "table"
   , (!!!)
   , getField
+  , getFieldMaybe
   , ParseError
   , readCSV
   , showCSV
@@ -101,6 +102,9 @@ indentLevel = length . takeWhile null
 (x:_)  !!! 0 = Just x
 (_:xs) !!! n = xs !!! (n - 1)
 
---getField :: CSV -> Int -> Int ->  Maybe Field
+getField :: CSV -> Int -> Int -> Maybe Field
 getField ys y x =  (ys !!! y) >>= (!!! x)
+
+getFieldMaybe :: CSV -> Int -> Int -> Field -> Field
+getFieldMaybe ys y x f = fromMaybe f $ getField ys y x
 
