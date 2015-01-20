@@ -7,6 +7,8 @@ module Data.EdgeLabeledGraph
   , addVertex
   , removeVertex
   , removeVertex'
+  , removeVertices
+  , removeVertices'
   , addEdge
   , removeEdge
   , removeEdge'
@@ -51,10 +53,18 @@ addVertex :: (Vertex v k, Ord k) => v -> Graph k v l -> Graph k v l
 addVertex v g = g { vertexMap = M.insert (index v) v (vertexMap g) }
 
 removeVertex :: (Vertex v k, Ord k) => v -> Graph k v l -> Graph k v l
-removeVertex = undefined
+removeVertex = removeVertex' . index
 
 removeVertex' :: (Vertex v k, Ord k) => k -> Graph k v l -> Graph k v l
-removeVertex' = undefined
+removeVertex' k g = g 
+  { vertexMap = M.delete k $ vertexMap g
+  , adjMap    = M.map (filter ((/=k) . snd)) . M.delete k $ adjMap g }
+
+removeVertices' :: (Vertex v k, Ord k) => [k] -> Graph k v l -> Graph k v l
+removeVertices' ks g = foldl' (flip removeVertex') g ks
+
+removeVertices :: (Vertex v k, Ord k) => [v] -> Graph k v l -> Graph k v l
+removeVertices vs g = foldl' (flip removeVertex) g vs
 
 addEdge :: (Ord k, Eq l, Vertex v k) => 
   v -> v -> l -> Graph k v l -> Graph k v l
@@ -87,7 +97,7 @@ modifyVertex v f g = g { vertexMap = M.adjust f (index v) (vertexMap g) }
 filterVertices = undefined
 
 vertex :: Ord k => k -> Graph k v l -> Maybe v
-vertex k g = M.lookup k (vertexMap g)
+vertex k = M.lookup k . vertexMap
 
 outEdges' :: (Vertex v k, Ord k) => k -> Graph k v l -> [(l,k)]
 outEdges' k g = concat . maybeToList $ M.lookup k (adjMap g)
