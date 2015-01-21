@@ -75,10 +75,11 @@ addEdge v1 v2 l g = g
         k2 = index v2
 
 removeEdge :: (Ord k, Eq l, Vertex v k) => v -> v -> l -> Graph k v l -> Graph k v l
-removeEdge = undefined
+removeEdge v1 v2 l = removeEdge' (index v1) (index v2) l
 
 removeEdge' :: (Ord k, Eq l, Vertex v k) => k -> k -> l -> Graph k v l -> Graph k v l
-removeEdge' = undefined
+removeEdge' k1 k2 l g = g
+  { adjMap = M.adjust (delete (l,k2)) k1 (adjMap g) }
 
 -- NB: this will also remove singleton vertices
 -- TODO: fix this

@@ -26,6 +26,7 @@ module Catalogue
   , csvCatalogueSubset
   , saveCatalogue
   , fixItemIds
+  , fixTreeTopicIds
   , fixTreeItemIds
   , itemLinks
   , itemLinks'
@@ -50,6 +51,11 @@ module Catalogue
   , replaceItem
   , replaceItem'
   , addItemTree
+  , removeLink
+  , addLink
+  , addLinks
+  , links'
+  , removeTopicEditors
   , treesWithItems ) where
 
 import Control.Applicative ((<$>),liftA2)
@@ -189,7 +195,8 @@ loadCatalogueComponent f = readCatalogueComponent <$> readFile f
 
 readCat :: CSV -> (Catalogue, [WeakLink])
 readCat xs = (,links) $ Cat
-  { catAreas    = G.unions $ map (G.fromTree $ const SubItem) forest'
+  { catAreas    = G.unions $ 
+                  map (G.fromTree (const SubItem) . fixTreeTopicIds) forest'
   , catId       = getFieldMaybe xs 1 1 ""
   , catName     = getFieldMaybe xs 2 1 ""
   , catVersion  = getField xs 3 1
@@ -239,7 +246,7 @@ readFields t ix xs = Item
   , itemEditors = readEditors . fromMaybe [] $ xs !!! (ix !! 3) }
 
 readEditors :: String -> [ItemEditor]
-readEditors = map (unwords . words) . splitOneOf ",;"
+readEditors = filter (not . null) . map (unwords . words) . splitOneOf ",;"
 
 levelMap :: (Int -> a -> b) -> Tree a -> Tree b
 levelMap f = lmap 0 
@@ -256,6 +263,11 @@ addLink :: Catalogue -> (ItemId,ItemId,Link) -> Maybe Catalogue
 addLink cat (x1,x2,l) = case (getItem cat x1, getItem cat x2) of
   (Just x1, Just x2) -> Just $ cat { catAreas = G.addEdge x1 x2 l (catAreas cat) }
   _                  -> error $ "Cannot add link " ++ show (x1,x2,l) --Nothing
+
+removeLink :: Catalogue -> (ItemId,ItemId,Link) -> Catalogue
+removeLink c (x1,x2,l) = case (getItem c x1, getItem c x2) of
+  (Just x1, Just x2) -> c { catAreas = G.removeEdge x1 x2 l $ catAreas c } 
+  _ -> c
 
 addLinks :: Catalogue -> [(ItemId,ItemId,Link)] -> Maybe Catalogue
 addLinks cat = foldM addLink cat
@@ -384,6 +396,9 @@ knowledgeUnits = filter ((==KU) . itemType) . knowledgeItems
 knowledgeTopics :: Catalogue -> [Item]
 knowledgeTopics = filter ((==KT) . itemType) . knowledgeItems
 
+links' :: Catalogue -> [(ItemId,ItemId,Link)]
+links' = map (\(x1,l,x2) -> (itemId x1,itemId x2,l)) . G.toEdgeList . catAreas
+
 -- TODO: generalize so that it works with topics and areas...
 addArea :: Catalogue -> ItemTree -> ItemTree
 addArea c n@(Node x ns) = case getItemArea c (itemId x) of
@@ -393,6 +408,7 @@ addArea c n@(Node x ns) = case getItemArea c (itemId x) of
 getItemArea :: Catalogue -> ItemId -> Maybe Item
 getItemArea c x = getItem c $ x { unitId = Nothing, topicId = Nothing }
 
+-- TODO: change to (ItemId,Link)
 itemLinks :: Catalogue -> Item -> [(Link,ItemId)]
 itemLinks c x = map (\(l,x) -> (l,itemId x)) . G.outEdges x $ catAreas c
 
@@ -471,6 +487,20 @@ fixTreeItemIds = fix0
             Node x $ zipWith (fix x) ns [1..]
           | otherwise = 
             Node (x { itemId = childId (itemId y) i }) $ zipWith (fix x) ns [1..]
+
+fixTreeTopicIds :: ItemTree -> ItemTree
+fixTreeTopicIds = fix0
+  where fix0 (Node x ns) = Node x $ zipWith (fix x) ns [1..]
+        fix y (Node x ns) i 
+          | itemType x == KT && itemId x /= childId (itemId y) i = 
+            Node (x { itemId = childId (itemId y) i }) $ zipWith (fix x) ns [1..]
+          | otherwise = 
+            Node x $ zipWith (fix x) ns [1..]
+
+removeTopicEditors :: Catalogue -> Catalogue
+removeTopicEditors c = 
+  foldl' (\c x -> modifyItem c (itemId x) f) c (knowledgeTopics c)
+  where f x = x { itemEditors = [] }
 
 ------------------------------------------------------------------------------
 -- Catalogue output to CSV
