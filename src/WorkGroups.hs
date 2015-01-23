@@ -13,7 +13,7 @@ import Data.Graph.Inductive
 import qualified Data.Map as M
 import Data.Maybe
 import Data.List.Partition (eqClasses)
-import SimLists
+import SimLists hiding (catFile, dir)
 import qualified SplitGraph as SG
 import System.FilePath
 import Text.Printf
@@ -34,6 +34,14 @@ mkOverlapGraph g = undir $ mkGraph (zip [0..] nodes) edges
         ix = M.fromList $ zip nodes [0..]
         isUnit x = (isJust . unitId $ x) && (topicId x == Nothing)
         lift x = x { topicId = Nothing } 
+
+overlapGraph :: Catalogue -> OverlapGraph
+overlapGraph c =
+  undir $ mkGraph (zip [0..] nodes) 
+                  [(ix x1,ix x2,()) | (x1,x2,Overlaps) <- links' c ]
+  where nodes = map itemId $ knowledgeUnits c
+        ixMap = M.fromList $ zip nodes [0..]
+        ix x  = fromJust $ M.lookup x ixMap
 
 g = mkGraph (zip [1..5] "12345") 
             [(1,2,"12"),(2,3,"23"),(1,3,"13"),(3,4,"34"),(3,5,"35"),(4,5,"45")] :: Gr Char String
@@ -68,7 +76,7 @@ addOverlapLinks og c = c { catAreas = g' }
 
 type OverlapComponent = (Int, [(ItemId, [Int])])
 
-maxComponentSize = 10
+maxComponentSize = 1000
 
 overlapComponents :: OverlapGraph -> [OverlapComponent]
 overlapComponents og = 
@@ -80,8 +88,8 @@ overlapComponents og =
                       filter (/=i) $ gi x)
 
 analyseOverlaps = do
-  og <- loadOverlapGraph
-  Right cat <- loadCatalogue catFile
+  Right c <- loadCatalogue $ dir </> catFile
+  let og = overlapGraph c
   let  oc  = filter ((>1) . noNodes) $ SG.gComponents og
        n   = sum $ map noNodes oc
        xs  = C.fromList $ map noNodes oc
@@ -91,9 +99,6 @@ analyseOverlaps = do
        pl  = C.fromList $ map longestShortestPath oc'
        a   = length . nub $ concatMap nodes oc' \\ concatMap nodes oc
        zs  = C.fromList . map snd . C.counts . C.fromList $ concatMap nodes oc'
-       gs  = mkGroups cat $ overlapComponents og
-       ges = C.fromList $ map (length . nub . concatMap (componentEditors cat)) gs
-       gcs = C.fromList $ map length gs
   putStr . unlines $
     [ printf "%d non-singleton components" (length oc) 
     , printf "%d nodes in non-singleton components" n 
@@ -102,10 +107,7 @@ analyseOverlaps = do
     , printf "components size histogram: %s" (show $ C.counts xs')
     , printf "longest shortest paths histogram: %s" (show $ C.counts pl)
     , printf "articulation points split: %d" a
-    , printf "articulation points multiplicity histogram: %s" (show $ C.counts zs)
-    , printf "number of groups: %d" (length gs)
-    , printf "group sizes (by components) histogram: %s" (show $ C.counts gcs) 
-    , printf "group sizes (by editors) histogram: %s" (show $ C.counts ges) ]
+    , printf "articulation points multiplicity histogram: %s" (show $ C.counts zs) ]
 
 longestShortestPath :: Gr a b -> Int
 longestShortestPath g = maximum $ map (longest g) (nodes g)
@@ -165,63 +167,59 @@ csvOverlapComponent c oc@(i,zs) =
                 printf "SHARED WITH COMPONENTS: %s" (intercalate ", " $ map show z)
         c2 = foldl' (\c (x,z) -> addItemRemark c x (r z)) c zs
 
+dir     = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.3/"
+catFile = "FER3-KC-v0.3.0.csv"
+componentsFile = dir </> "components/FER3-v0.3-components.txt"
 componentsCsvDir = dir </> "components-csv"
-componentsFile = dir </> "components/FER3-v0.2-components.txt"
 
 main = do
-  Right c <- loadCatalogue catFile
-  gs <- loadComponents
-  forM_ (zip [(0::Int)..] gs) $ \(i,ocs) -> do
-    forM_ ocs $ \oc@(j,_) -> do 
-      let csv = csvOverlapComponent c oc
-      writeFile (componentsCsvDir </> printf "g%03d-c%03d.csv" i j) (showCSV csv)
+  Right c <- loadCatalogue $ dir </> catFile
+  ocs <- loadComponents
+  forM_ ocs $ \oc@(i,_) -> do 
+    let csv = csvOverlapComponent c oc
+    writeFile (componentsCsvDir </> printf "c%03d.csv" i) (showCSV csv)
 
-loadComponents :: IO [[OverlapComponent]]
+loadComponents :: IO [OverlapComponent]
 loadComponents = read <$> readFile componentsFile
 
 generateComponents = do
-  og <- loadOverlapGraph
-  Right c' <- loadCatalogue catFile
-  let c   = addOverlapLinks og c'
+  Right c <- loadCatalogue $ dir </> catFile
+  let og = overlapGraph c
       ocs = overlapComponents og
-      rest = map itemId (knowledgeUnits c) \\ concatMap (map fst . snd) ocs
-      restComp = (0, map (\x -> (x,[])) rest)
-      gs  = [restComp] : mkGroups c ocs
-  writeFile componentsFile $ show gs
+  writeFile (dir </> componentsFile) $ show ocs
 
 generateIndex = do
-  gs <- tail <$> loadComponents
-  Right c <- loadCatalogue catFile
-  let h = ["Group", "Component", "Filename", "Component size", 
+  ocs <- loadComponents
+  Right c <- loadCatalogue $ dir </> catFile
+  let h = ["Component", "Filename", "Component size", 
            "Component subcats", "Component editors", "Component units" ]
       h1 = "Editor" : h
       h2 = "Subcats" : h
       h3 = "KU" : h
-      xs = sort $ [ [e,show i,show j, printf "g%03d-c%03d.csv" i j,
+      xs = sort $ [ [e,show j, printf "c%03d.csv" j,
              show $ length kus,
              intercalate ", " as,intercalate ", " es,
              intercalate ", " $ map (showItemId . fst) kus ] | 
-             (i,ocs) <- zip [(1::Int)..] gs, oc@(j,kus) <- ocs, 
+             oc@(j,kus) <- ocs, 
              let as = componentCats c oc,
              let es = componentEditors c oc,
              e <- es ]
-      ys = sort $ [ [a,show i,show j, printf "g%03d-c%03d.csv" i j,
+      ys = sort $ [ [a,show j, printf "c%03d.csv" j,
              show $ length kus,
              intercalate ", " as,intercalate ", " es,
              intercalate ", " $ map (showItemId . fst) kus ] | 
-             (i,ocs) <- zip [(1::Int)..] gs, oc@(j,kus) <- ocs, 
+             oc@(j,kus) <- ocs, 
              let as = componentCats c oc,
              let es = componentEditors c oc,
              a <- as ]
-      zs = sort $ [ [ku,show i,show j, printf "g%03d-c%03d.csv" i j,
+      zs = sort $ [ [ku,show j, printf "c%03d.csv" j,
              show $ length kus,
              intercalate ", " as,intercalate ", " es,
              intercalate ", " $ map (showItemId . fst) kus ] | 
-             (i,ocs) <- zip [(1::Int)..] gs, oc@(j,kus) <- ocs, 
+             oc@(j,kus) <- ocs, 
              let as = componentCats c oc,
              let es = componentEditors c oc,
              ku <- map (showItemId . fst) kus ]
-  writeFile (componentsCsvDir </> "index-editors.csv") $ showCSV (h1:xs)
-  writeFile (componentsCsvDir </> "index-subcats.csv") $ showCSV (h2:ys)
-  writeFile (componentsCsvDir </> "index-kus.csv") $ showCSV (h3:zs)
-      
+  writeFile (componentsCsvDir </> "index-editor.csv") $ showCSV (h1:xs)
+  writeFile (componentsCsvDir </> "index-subcat.csv") $ showCSV (h2:ys)
+  writeFile (componentsCsvDir </> "index-ku.csv") $ showCSV (h3:zs)

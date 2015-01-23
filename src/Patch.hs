@@ -8,6 +8,9 @@ import CSV
 import Data.List
 import Data.Maybe
 import qualified Data.Set as S
+import System.Directory
+import System.Environment
+import System.FilePath
 
 import Debug.Trace
 
@@ -44,10 +47,12 @@ patchDiff cat (cmp,links) = Diff
                        filter (\(x1,x2,l) -> l==ReplacedBy) links
         pointedTo = map snd replaceLinks
 
--- whether two items are identical up to remark fields
+-- whether two items are identical up to remark fields and topic editors
 identicalItems :: Catalogue -> Catalogue -> ItemId -> Maybe Bool
 identicalItems c1 c2 x = liftA2 (==) (f <$> getItemTree c1 x) (f <$> getItemTree c2 x)
-  where f = fmap (\x -> x { itemRemark = Nothing })
+  where f = fmap (\x -> x { itemRemark = Nothing, 
+                            itemEditors = if itemType x == KT then [] 
+                                            else itemEditors x  })
 
 patch :: Catalogue -> Patch -> (Catalogue, Diff)
 patch c p@(cmp,_) = (c6, d)
@@ -62,7 +67,7 @@ patch c p@(cmp,_) = (c6, d)
         units = map itemId $ knowledgeUnits cmp
         c4 = foldl' removeLink c3 overlaps2
         c5 = combineEditorsAndOverlaps c4 p
-        c6 = fromJust $ foldM (\c (x1,x2) -> replaceItem' c x1 x2) c5 $ replaced d
+        c6 = foldl' (\c (x1,x2) -> fromMaybe c (replaceItem' c x1 x2)) c5 $ replaced d
 --        c6 = fixItemIds $ pruneItems c5  -- DO THIS AFTER APPLYING ALL PATCHES!
 
 overlapLinks :: Catalogue -> [(ItemId,ItemId,Link)]
@@ -102,14 +107,72 @@ bogusPatch c p@(cmp,links) =
         (repFrom, repTo) = unzip rep
         linked = concatMap (\(x1,x2,_) -> [x1,x2]) $
                  filter (\(x1,x2,l) -> l==ReplacedBy) links
+
+patchAndLog :: Catalogue -> FilePath -> IO (Catalogue,CSV)
+patchAndLog c f = do
+  Right p <- loadCatalogueComponent f
+  let (c2,d) = patch c p
+      Diff rem add mod ret rep = d
+      xs = [[patchFile,showItemId x,"Removed"] | x <- rem] ++ 
+           [[patchFile,showItemId x,"Added"] | x <- add] ++ 
+           [[patchFile,showItemId x,"Modified"] | x <- mod] ++ 
+           [[patchFile,showItemId x,"Retained"] | x <- ret] ++ 
+           [[patchFile,showItemId x,"Replaced by " ++ showItemId y] | (x,y) <- rep]
+  return (c2,xs)
+  where patchFile = takeFileName f
  
 main = do
-  Right c <- loadCatalogue "../data/catalogue/v0.2/catalogue/FER3-v0.2.3.csv"
-  Right p <- loadCatalogueComponent "../data/catalogue/v0.2/components-resolved-csv/g020-c022-proba.res.csv"
-  let (c',diff) = patch c p
-      c'' = removeTopicEditors c'
-  saveCatalogue "../data/catalogue/v0.2/catalogue/patched.csv" c''
+  Right c <- loadCatalogue "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.3/FER3-v0.2.6.csv"
+  Right p <- loadCatalogueComponent "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/ok/g115-c288.res.csv"
+  let (_,diff) = patch c p
   return diff
+
+dInbox = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/inbox"
+catFile = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.3/FER3-v0.2.7.csv"
+dOk = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/ok"
+dBogus = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/bogus"
+newCatFile = "FER3-v0.2.8.csv"
+
+sortPatches1 = do
+  Right c <- loadCatalogue catFile
+  fs <- filter (".csv" `isSuffixOf`) <$> getDirectoryContents dInbox
+  forM_ fs $ \f -> do
+    putStr $ f ++ ": "
+    Right p <- loadCatalogueComponent $ dInbox </> f
+    putStrLn $ if bogusPatch c p then "BOGUS" else "OK"
+    if bogusPatch c p 
+      then renameFile (dInbox </> f) (dBogus </> f)
+       else renameFile (dInbox </> f) (dOk </> f)
+
+sortPatches2 = do
+  Right c <- loadCatalogue catFile
+  fs <- filter (".csv" `isSuffixOf`) <$> getDirectoryContents dOk
+  forM_ fs $ \f -> do
+    putStr $ f ++ ": "
+    Right p <- loadCatalogueComponent $ dOk </> f
+    let d = patchDiff c p
+    if null (replaced d) 
+      then do
+        putStrLn "NO-REPLACE"
+        renameFile (dOk </> f) (dOk </> "no-replace" </> f)
+      else do
+        putStrLn "REPLACE"
+        renameFile (dOk </> f) (dOk </> "replace" </> f)
+
+dOut = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/out"
+
+applyPatches = do
+  Right c <- loadCatalogue catFile
+  fs <- map (dOk </>) . filter (".csv" `isSuffixOf`) <$> getDirectoryContents dOk
+  (cNew,log) <- foldM (\(c,csv) f -> do
+    (c2,csv2) <- patchAndLog c f
+    putStrLn $ f ++ show (length csv2)
+    return (c2,csv++csv2)) (c,[]) fs
+  saveCatalogue (dOut </> newCatFile) (removeTopicEditors $ addInfoRemark cNew)
+  writeFile (dOut </> "log.csv") (showCSV log)
+  
+  
+   
 
 -- proći kroz stablo, pobrati linkove
 

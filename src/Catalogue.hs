@@ -56,6 +56,7 @@ module Catalogue
   , addLinks
   , links'
   , removeTopicEditors
+  , addInfoRemark
   , treesWithItems ) where
 
 import Control.Applicative ((<$>),liftA2)
@@ -230,7 +231,7 @@ readItemIds ix xs = case xs !!! ix of
 
 -- Reads item and the remaining columns
 readItem :: Int -> [Field] -> (Item,[Field])
-readItem level xs = case level of
+readItem level xs = {-trace (show xs) $ -} case level of
   0 -> (readFields KA [0,1,6,7] xs, rest)
   1 -> (readFields KU [2,3,6,7] xs, rest)
   2 -> (readFields KT [4,5,6,7] xs, rest)
@@ -345,7 +346,7 @@ pruneItems :: Catalogue -> Catalogue
 pruneItems c = removeItems c2 ka
   where ku = filter (null . getSubitems c) $ knowledgeUnits c
         c2 = removeItems c ku
-        ka = filter (null . getSubitems c) $ knowledgeAreas c
+        ka = filter (null . getSubitems c2) $ knowledgeAreas c2
 
 -- redirects incoming links to a new node
 -- Subitem links are NOT redirected
@@ -441,6 +442,12 @@ childId x i = case (unitId x,topicId x) of
 nonuniqueIds :: Catalogue -> [ItemId]
 nonuniqueIds c = xs \\ nub xs
   where xs = map itemId $ knowledgeItems c
+
+symmetricizeOverlaps :: Catalogue -> Catalogue
+symmetricizeOverlaps c = 
+  c { catAreas = G.fromEdgeList . concatMap f $ G.toEdgeList (catAreas c) } 
+  where f l@(x1,Overlaps,x2) = [l,(x2,Overlaps,x1)]
+        f l                  = [l]
 
 ------------------------------------------------------------------------------
 -- Catalogue--ItemTree conversions
@@ -548,6 +555,13 @@ csvCatalogue c =
 saveCatalogue :: FilePath -> Catalogue -> IO ()
 saveCatalogue f = writeFile f . showCSV . csvCatalogue 
 
+addInfoRemark :: Catalogue -> Catalogue
+addInfoRemark c =
+  c { catRemarks = Just $ printf "%d KAs, %d KUs, %d KTs"
+                  (length $ knowledgeAreas c)
+                  (length $ knowledgeUnits c)
+                  (length $ knowledgeTopics c) }
+
 addItemRemark :: Catalogue -> ItemId -> String -> Catalogue
 addItemRemark c x r = modifyItem c x addRemark
   where addRemark x = x  
@@ -582,6 +596,23 @@ correct = do
   Right c <- loadCatalogue "../data/catalogue/v0.2/catalogue/FER3-v0.2.3.csv"
   let xs = itemIdCorrections c
   saveCatalogue "FER3-v0.2.3.csv" $ changeItemIds c xs  
+
+removeOld = do
+  Right c <- loadCatalogue "../data/catalogue/v0.3/FER3-v0.2.4.csv"
+  return . removeTopicEditors . pruneItems $ removeItems' c (map (fromJust . readItemId) xs)
+--todo: fix tree topic IDS
+
+sym = do
+  Right c <- loadCatalogue "../data/catalogue/v0.3/FER3-v0.2.5.csv"
+  return $ symmetricizeOverlaps c
+
+xs = ["CS-SE","SE-SE","CE-SE","TI-PS08","TI-PS10","TI-PS12","TI-PS13","TI-PS14","WT-CT","TI-CN","TI-DA","WT-CS","WT-OC","SE-AL","CE-PRF","CS-PL","SE-PL","TI-DN03","TI-DN04","TI-DN05","TI-PS01","TI-PS02","TI-PS03","TI-PS04","TI-PS05","TI-PS06","TI-PS07","TI-PS09","CS-AL","CE-SDF","CS-SDF","SE-SDF","CE-DBS","CS-IM","SE-IM","TI-DK","SE-INS","CE-PBD","CS-PBD","SE-PBD","CS-CN","CS-SF"]
+
+main3 = do
+  Right c <- loadCatalogue "../data/catalogue/v0.3/FER3-KC-v0.2.9.csv"
+  let c2 = removeTopicEditors . addInfoRemark $ symmetricizeOverlaps c
+  saveCatalogue "../data/catalogue/v0.3/FER-KC-v0.3.0.csv" c2
+
 
 {-
 
