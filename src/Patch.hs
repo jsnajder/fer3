@@ -5,54 +5,75 @@ import Catalogue
 import Control.Applicative
 import Control.Monad
 import CSV
+import qualified Data.EdgeLabeledGraph as G  -- TMP!
 import Data.List
 import Data.Maybe
 import qualified Data.Set as S
 import System.Directory
 import System.Environment
 import System.FilePath
+import Data.Tree
 
 import Debug.Trace
 
-type Patch = CatalogueComponent
+type Patch = (Catalogue, [(ItemId,Op)])
+
+data Op = ReplaceBy [ItemId] | Delete | Resolve | Modify | Add
+  deriving (Eq,Ord,Show,Read)
+
+readPatch :: String -> Either ParseError Patch
+readPatch s = mk . readItemForest . dropWhile isHeader <$> readCSV s
+  where mk ts = ( emptyCat { catAreas = G.unions $ 
+                    map (G.fromTree (const SubItem) . fixTreeTopicIds . fmap fst) ts }
+                , mapMaybe readOp . filter ((==KU) . itemType . fst) $ concatMap flatten ts )
+        isHeader [] = True
+        isHeader (x:_) = isNothing $ readItemId' x
+
+readOp :: (Item,[Field]) -> Maybe (ItemId,Op)
+readOp (x, zs) = case zs !!! 1 of
+  Nothing -> Nothing
+  Just "DEL" -> Just (x', Delete)
+  Just "ADD" -> Just (x', Add)
+  Just xs -> Just $ (x', let ys = readItemIds xs
+                         in if ys==[itemId x] then Resolve else ReplaceBy ys)
+  where x' = itemId x
+
+loadPatch :: FilePath -> IO (Either ParseError Patch)
+loadPatch f = readPatch <$> readFile f
 
 data Diff = Diff
   { removed  :: [ItemId]
   , added    :: [ItemId]
   , modified :: [ItemId]
-  , retained :: [ItemId]
+  , resolved :: [ItemId]
   , replaced :: [(ItemId,ItemId)] } deriving (Eq,Ord,Show)
 
 patchDiff :: Catalogue -> Patch -> Diff
-patchDiff cat (cmp,links) = Diff
+patchDiff cat (cmp,ops) = Diff
   { removed  = removed
   , added    = added
   , modified = modified
-  , retained = retained
+  , resolved = resolved
   , replaced = replaced }
-  where catItems  = knowledgeUnits cat
-        cmpItems  = knowledgeUnits cmp
-        catItems' = map itemId catItems
-        cmpItems' = map itemId cmpItems
-        hit       = cmpItems' `intersect` catItems'
-        new       = cmpItems' \\ catItems'
-        kept       = pointedTo `intersect` cmpItems'
-        added     = new `intersect` kept
-        removed   = (hit \\ kept) \\ map fst replaced
-        replaced  = filter (uncurry (/=)) replaceLinks
-        retained  = map fst $ filter (uncurry (==)) replaceLinks
+  where catUnits  = knowledgeUnits cat
+        cmpUnits  = knowledgeUnits cmp
+        catUnits' = map itemId catUnits
+        cmpUnits' = map itemId cmpUnits
+        removed   = [x | (x,Delete) <- ops, x `elem` catUnits']
+        add       = [x | (x,Add) <- ops]
+        replaced  = [(x,y) | (x,ReplaceBy ys) <- ops, x `elem` catUnits', y <- ys]
+        replaceTo = nub $ map snd replaced
+        resolved  = [x | (x,Resolve) <- ops]
+        -- add a unit if (1) pointed to or (2) not changed, but new
+        added     = (nub $ replaceTo ++ add) \\ catUnits'
         modified  = filter (not . fromJust . identicalItems cat cmp) $
-                    kept `intersect` hit
-        replaceLinks = map (\(x1,x2,_) -> (x1,x2)) $
-                       filter (\(x1,x2,l) -> l==ReplacedBy) links
-        pointedTo = map snd replaceLinks
+                    ((cmpUnits' `intersect` catUnits') \\ removed) \\ added
 
--- whether two items are identical up to remark fields and topic editors
 identicalItems :: Catalogue -> Catalogue -> ItemId -> Maybe Bool
-identicalItems c1 c2 x = liftA2 (==) (f <$> getItemTree c1 x) (f <$> getItemTree c2 x)
-  where f = fmap (\x -> x { itemRemark = Nothing, 
-                            itemEditors = if itemType x == KT then [] 
-                                            else itemEditors x  })
+identicalItems c1 c2 x = liftA2 (==) (getItemTree c1 x) (getItemTree c2 x)
+--  where f = fmap (\x -> x { itemRemark = Nothing, 
+--                            itemEditors = if itemType x == KT then [] 
+--                                            else itemEditors x  })
 
 patch :: Catalogue -> Patch -> (Catalogue, Diff)
 patch c p@(cmp,_) = (c6, d)
@@ -61,24 +82,20 @@ patch c p@(cmp,_) = (c6, d)
         adds = map fixTreeTopicIds . treesWithItems cmp $ added d ++ modified d
         c3 = foldl' addItemTree c2 adds
         overlaps = overlapLinks c3
-        resolved = retained d ++ map fst (replaced d)
-        overlaps2 = filter (\(x1,x2,_) -> 
-                      x1 `elem` resolved && x2 `elem` units) overlaps
+        resolved' = resolved d ++ map fst (replaced d)
         units = map itemId $ knowledgeUnits cmp
+        overlaps2 = filter (\(x1,x2,_) -> 
+                      (x1 `elem` resolved' && x2 `elem` units) ||
+                      (x1 `elem` units && x2 `elem` resolved')) overlaps
         c4 = foldl' removeLink c3 overlaps2
         c5 = combineEditorsAndOverlaps c4 p
         c6 = foldl' (\c (x1,x2) -> fromMaybe c (replaceItem' c x1 x2)) c5 $ replaced d
---        c6 = fixItemIds $ pruneItems c5  -- DO THIS AFTER APPLYING ALL PATCHES!
 
 overlapLinks :: Catalogue -> [(ItemId,ItemId,Link)]
 overlapLinks = filter (\(_,_,l) -> l==Overlaps) . links'
 
--- for all resolved items (== ReplaceBy sources),
--- remove all overlap links to items within this component
-purifyOverlapLinks :: Catalogue -> Patch -> Patch
-purifyOverlapLinks c p = undefined
-
 -- for all ReplaceBy targets, take ReplaceBy source editors
+-- for all ReokaceBy targets, take ReplaceBy 
 -- (remark: inefficient, because diff is computed again)
 combineEditorsAndOverlaps :: Catalogue -> Patch -> Catalogue
 combineEditorsAndOverlaps c p@(cmp,_) = c3
@@ -87,107 +104,69 @@ combineEditorsAndOverlaps c p@(cmp,_) = c3
                  liftA2 (,) (getItem c x1) (getItem cmp x2)) rep
         addEditors x1 x2 = x2 {
             itemEditors = sort . nub $ itemEditors x1 ++ itemEditors x2 }
-        links' = substitute rep $ overlapLinks c
+        links' = substitute $ overlapLinks c
         c2 = foldl' (\c (x1,x2) -> modifyItem c (itemId x2) (addEditors x1)) c rep'
         c3 = fromJust $ addLinks c2 links'
-        substitute zs xs = [(fromMaybe x1 $ lookup x1 zs,x2,l) | (x1,x2,l) <- xs]
- 
--- patch is bogus if maps from/to KA/KT (only KU mappings are allowed)
--- OR if it resolves a unit that does not exist anymore or maps to
--- a unit that does not exist in the component or in the catalogue
+        substitute xs = [(x1',x2',l) | (x1,x2,l) <- xs,
+                         let x1' = fromMaybe x1 $ lookup x1 rep,
+                         let x2' = fromMaybe x2 $ lookup x2 rep, 
+                         x1'/=x2', 
+                         x1 `elem` map fst rep || x2 `elem` map fst rep ]
+
+-- patch is bogus if it operates on a (non-added) unit that does not exist in the
+-- catalogue or maps to a unit that does not exist in the component nor in the 
+-- catalogue
 bogusPatch :: Catalogue -> Patch -> Bool
-bogusPatch c p@(cmp,links) = 
-  (mod `intersect` catItems /= mod) ||
-  (repFrom `intersect` catItems /= repFrom) ||
-  (repTo `intersect` (catItems ++ cmpItems) /= repTo) ||
-  any (\x -> itemType' x == KA || itemType' x == KT) linked 
-  where catItems  = map itemId $ knowledgeItems c
-        cmpItems  = map itemId $ knowledgeItems cmp
-        Diff rem add mod ret rep = patchDiff c p
-        (repFrom, repTo) = unzip rep
-        linked = concatMap (\(x1,x2,_) -> [x1,x2]) $
-                 filter (\(x1,x2,l) -> l==ReplacedBy) links
+bogusPatch c p@(cmp,ops) = 
+  (opItems   `intersect` catUnits /= opItems) ||
+  (replaceTo `intersect` (catUnits ++ cmpUnits) /= replaceTo) 
+  where catUnits  = map itemId $ knowledgeUnits c
+        cmpUnits  = map itemId $ knowledgeUnits cmp
+        opItems   = map fst ops \\ added
+        replaceTo = nub $ [y | (_,ReplaceBy ys) <- ops, y <- ys]
+        added     = [x | (x,Add) <- ops]
 
 patchAndLog :: Catalogue -> FilePath -> IO (Catalogue,CSV)
 patchAndLog c f = do
-  Right p <- loadCatalogueComponent f
+  Right p <- loadPatch f
   let (c2,d) = patch c p
-      Diff rem add mod ret rep = d
+      Diff rem add mod res rep = d
       xs = [[patchFile,showItemId x,"Removed"] | x <- rem] ++ 
            [[patchFile,showItemId x,"Added"] | x <- add] ++ 
            [[patchFile,showItemId x,"Modified"] | x <- mod] ++ 
-           [[patchFile,showItemId x,"Retained"] | x <- ret] ++ 
+           [[patchFile,showItemId x,"Declared as non-overlapping (within this component)"] | x <- res] ++ 
            [[patchFile,showItemId x,"Replaced by " ++ showItemId y] | (x,y) <- rep]
-  return (c2,xs)
+  return (c2,zipWith (\x xs -> show x : xs) [1..] xs)
   where patchFile = takeFileName f
- 
-main = do
-  Right c <- loadCatalogue "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.3/FER3-v0.2.6.csv"
-  Right p <- loadCatalogueComponent "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/ok/g115-c288.res.csv"
-  let (_,diff) = patch c p
-  return diff
 
-dInbox = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/inbox"
-catFile = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.3/FER3-v0.2.7.csv"
-dOk = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/ok"
-dBogus = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/bogus"
-newCatFile = "FER3-v0.2.8.csv"
+dir = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.3"
+catFile = dir </> "FER3-KC-v0.3.0.csv"
+dirInbox = dir </> "components-csv-resolved"
+dirOk = dirInbox </> "ok"
+dirBogus = dirInbox </> "bogus"
+newCatFile = "FER3-KC-v0.4.0.csv"
+dirOut = dir </> "resolved"
 
-sortPatches1 = do
+sortPatches = do
   Right c <- loadCatalogue catFile
-  fs <- filter (".csv" `isSuffixOf`) <$> getDirectoryContents dInbox
+  fs <- filter (".csv" `isSuffixOf`) <$> getDirectoryContents dirInbox
   forM_ fs $ \f -> do
     putStr $ f ++ ": "
-    Right p <- loadCatalogueComponent $ dInbox </> f
-    putStrLn $ if bogusPatch c p then "BOGUS" else "OK"
-    if bogusPatch c p 
-      then renameFile (dInbox </> f) (dBogus </> f)
-       else renameFile (dInbox </> f) (dOk </> f)
-
-sortPatches2 = do
-  Right c <- loadCatalogue catFile
-  fs <- filter (".csv" `isSuffixOf`) <$> getDirectoryContents dOk
-  forM_ fs $ \f -> do
-    putStr $ f ++ ": "
-    Right p <- loadCatalogueComponent $ dOk </> f
-    let d = patchDiff c p
-    if null (replaced d) 
-      then do
-        putStrLn "NO-REPLACE"
-        renameFile (dOk </> f) (dOk </> "no-replace" </> f)
+    Right p <- loadPatch $ dirInbox </> f
+    if bogusPatch c p then do
+        putStrLn "BOGUS"
+        renameFile (dirInbox </> f) (dirBogus </> f)
       else do
-        putStrLn "REPLACE"
-        renameFile (dOk </> f) (dOk </> "replace" </> f)
-
-dOut = "/home/jan/fer3/fer3-catalogue/data/catalogue/v0.2/components-resolved-csv/out"
+        putStrLn "OK"
+        renameFile (dirInbox </> f) (dirOk </> f)
 
 applyPatches = do
   Right c <- loadCatalogue catFile
-  fs <- map (dOk </>) . filter (".csv" `isSuffixOf`) <$> getDirectoryContents dOk
+  fs <- map (dirOk </>) . filter (".csv" `isSuffixOf`) <$> getDirectoryContents dirOk
   (cNew,log) <- foldM (\(c,csv) f -> do
     (c2,csv2) <- patchAndLog c f
     putStrLn $ f ++ show (length csv2)
     return (c2,csv++csv2)) (c,[]) fs
-  saveCatalogue (dOut </> newCatFile) (removeTopicEditors $ addInfoRemark cNew)
-  writeFile (dOut </> "log.csv") (showCSV log)
-  
-  
-   
-
--- proći kroz stablo, pobrati linkove
-
--- insert SupercededBy link according to column J
--- 
--- extra pass: fix overlapping IDs
--- extra pass: fix child ids
--- check dangling pointers
--- delete (and log) areas/units/topics with outgoing edges
--- compare units: old version vs new version (output to log)
-
--- komponente su PATCHES: svaka mijenja underlying katalog
--- granula koja ima nešto u J stupcu se smatra razriješenom U TOJ komponenti: dakle 
---    brišu se in/out overlaping edges
--- o temama još razmisli
-
--- Korak 1: PRIMIJENI transformaciej untuar komponente 
--- Korak 2: zapatchaj katalog: dodaj nove granule, obriši SupercededBy
+  saveCatalogue (dirOut </> newCatFile) (removeTopicEditors $ addInfoRemark cNew)
+  writeFile (dirOut </> "log.csv") (showCSV log)
+ 

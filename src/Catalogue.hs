@@ -2,7 +2,7 @@
 
 module Catalogue 
   ( Catalogue (..) -- <== TODO: don't expose the graph structure!!!
-  , CatalogueComponent 
+  , emptyCat
   , Item (..)
   , ItemType (..)
   , itemType'
@@ -11,10 +11,11 @@ module Catalogue
   , ItemEditor
   , loadCatalogue
   , readCatalogue
-  , loadCatalogueComponent
-  , readCatalogueComponent
+  , readItem
   , readItemId
+  , readItemId'
   , showItemId
+  , readItemForest
   , splitCatalogue
   , knowledgeItems
   , knowledgeAreas
@@ -25,6 +26,7 @@ module Catalogue
   , csvCatalogue
   , csvCatalogueSubset
   , saveCatalogue
+  , readItemIds
   , fixItemIds
   , fixTreeTopicIds
   , fixTreeItemIds
@@ -91,7 +93,7 @@ data ItemType = CAT | KA | KU | KT deriving (Eq,Show,Enum,Read,Ord)
 
 type ItemEditor = String
 
-data ItemId = ItemId 
+data ItemId = Null | ItemId 
   { catCode  :: String
   , areaCode :: String
   , unitId   :: Maybe Int
@@ -99,7 +101,7 @@ data ItemId = ItemId
 
 {-
 instance Show ItemId where
-  show = showItemId
+  show x = "readItemId \"" ++ showItemId x ++ "\""
 -}
 
 data Item = Item
@@ -133,15 +135,12 @@ data Link
   | Overlaps
   | Related
   | Prereq
-  | ReplacedBy
   | Alias deriving (Eq,Ord,Show,Read)
 
 type ItemIndex = T.Text
 
 instance G.Vertex Item T.Text where
   index = T.pack . showItemId . itemId
-
-type CatGraph = (NodeMap Item, Gr Item Link)
 
 data Catalogue = Cat 
   { catAreas   :: G.Graph ItemIndex Item Link
@@ -164,10 +163,15 @@ showItemId (ItemId c a Nothing Nothing) = printf "%s-%s" c a
 -- Catalogue reading from a CSV file
 ------------------------------------------------------------------------------
 
-readItemId :: String -> Maybe ItemId
-readItemId s = case parse parseItemId "" s of
+readItemId' :: String -> Maybe ItemId
+readItemId' s = case parse parseItemId "" s of
   Right id -> Just id
   _        -> {-trace ("CANNOT READ: " ++ show s) $-} Nothing -- error $ "Cannot read ItemId " ++ show s
+
+readItemId :: String -> ItemId
+readItemId s = case parse parseItemId "" s of
+  Right id -> id
+  _        -> error $ "Cannot read ItemId " ++ show s
 
 parseItemId :: Parser ItemId
 parseItemId = do
@@ -184,17 +188,7 @@ loadCatalogue f = readCatalogue <$> readFile f
 readCatalogue :: String -> Either ParseError Catalogue
 readCatalogue s = (\(c,ls) -> fromJust $ addLinks c ls) . readCat <$> readCSV s
 
--- "weak links" are yet non-instantiated links
-type WeakLink = (ItemId,ItemId,Link)
-type CatalogueComponent = (Catalogue, [WeakLink])
-
-readCatalogueComponent :: String -> Either ParseError CatalogueComponent
-readCatalogueComponent s = readCat <$> readCSV s
-
-loadCatalogueComponent :: FilePath -> IO (Either ParseError CatalogueComponent)
-loadCatalogueComponent f = readCatalogueComponent <$> readFile f
-
-readCat :: CSV -> (Catalogue, [WeakLink])
+readCat :: CSV -> (Catalogue,[(ItemId,ItemId,Link)])
 readCat xs = (,links) $ Cat
   { catAreas    = G.unions $ 
                   map (G.fromTree (const SubItem) . fixTreeTopicIds) forest'
@@ -205,29 +199,21 @@ readCat xs = (,links) $ Cat
   , catEditors  = concat . maybeToList $ ( readEditors <$> getField xs 5 1 )
   , catRemarks  = getField xs 6 1 }
   where p []    = True
-        p (x:_) = isNothing $ readItemId x
-        forest  = map (levelMap readLinkedItem) . csvToForest . 
-                       filter (not . null) $ dropWhile p xs
+        p (x:_) = isNothing $ readItemId' x
+        forest  = readItemForest $ dropWhile p xs
         forest' = map (fmap fst) forest
-        areas   = map rootLabel forest'
-        links   = concatMap (getLinks . flatten) forest
+        links   = mkLinks 0 Overlaps . concatMap flatten $ forest
 
-getLinks :: [LinkedItem] -> [(ItemId,ItemId,Link)]       
-getLinks = concatMap (\(x1,ls) -> [(itemId x1,x2,l) | (l,x2) <- ls])
- 
-type LinkedItem = (Item,[(Link,ItemId)])
+mkLinks :: Int -> Link -> [(Item,[Field])] -> [(ItemId,ItemId,Link)]       
+mkLinks i l = concatMap (\(x1,zs) -> 
+  [(itemId x1,x2,l) | x2 <- fromMaybe [] $ (readItemIds <$> zs !!! i)] )
 
-readLinkedItem :: Int -> [Field] -> LinkedItem
-readLinkedItem level xs = (x, overlaps ++ replacedBy)
-  where (x,zs)     = readItem level xs
-        links l ix = map (l,) $ readItemIds ix zs
-        overlaps   = links Overlaps 0   -- column I
-        replacedBy = links ReplacedBy 1 -- column J
-        
-readItemIds :: Int -> [Field] -> [ItemId]
-readItemIds ix xs = case xs !!! ix of
-  Nothing -> []
-  Just x  -> map (fromJust . readItemId . unwords . words) $ splitOneOf ",;" x
+readItemIds :: Field -> [ItemId]
+readItemIds = map (readItemId . unwords . words) . splitOneOf ",;."
+
+readItemForest :: CSV -> [Tree (Item,[Field])]
+readItemForest =
+  map (levelMap readItem) . csvToForest . filter (not . null) 
 
 -- Reads item and the remaining columns
 readItem :: Int -> [Field] -> (Item,[Field])
@@ -240,7 +226,7 @@ readItem level xs = {-trace (show xs) $ -} case level of
 readFields :: ItemType -> [Int] -> [Field] -> Item
 readFields t ix xs = Item
   { itemType    = t
-  , itemId      = fromJust . readItemId $ xs !! (ix !! 0)
+  , itemId      = readItemId $ xs !! (ix !! 0)
   , itemLabel   = xs !! (ix !! 1)
   , itemVersion = Nothing
   , itemRemark  = xs !!! (ix !! 2)
@@ -583,10 +569,12 @@ filterTree2 p n@(Node x ns)
 ------------------------------------------------------------------------------
 -- TMP
 
+{-
 main = do
   Right (c,ls) <- loadCatalogueComponent "../data/catalogue/v0.2/components-resolved-csv/g020-c022.res.csv"
   printCSV $ csvCatalogue c
   print $ map (\(x1,x2,l) -> (showItemId x1, showItemId x2, l)) ls
+-}
 
 main2 = do
   Right c <- loadCatalogue "../data/catalogue/v0.2/catalogue/FER3-v0.2.3.csv"
@@ -599,7 +587,7 @@ correct = do
 
 removeOld = do
   Right c <- loadCatalogue "../data/catalogue/v0.3/FER3-v0.2.4.csv"
-  return . removeTopicEditors . pruneItems $ removeItems' c (map (fromJust . readItemId) xs)
+  return . removeTopicEditors . pruneItems $ removeItems' c (map readItemId xs)
 --todo: fix tree topic IDS
 
 sym = do
@@ -611,7 +599,7 @@ xs = ["CS-SE","SE-SE","CE-SE","TI-PS08","TI-PS10","TI-PS12","TI-PS13","TI-PS14",
 main3 = do
   Right c <- loadCatalogue "../data/catalogue/v0.3/FER3-KC-v0.2.9.csv"
   let c2 = removeTopicEditors . addInfoRemark $ symmetricizeOverlaps c
-  saveCatalogue "../data/catalogue/v0.3/FER-KC-v0.3.0.csv" c2
+  saveCatalogue "../data/catalogue/v0.3/FER3-KC-v0.3.0.csv" c2
 
 
 {-
